@@ -168,7 +168,9 @@ export default function ProfilePicTab({ profile }: Props) {
     const from = (page - 1) * PAGE
     const { data, count } = await q
       .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
-      .order('last_team_name', { ascending: true, nullsFirst: false })
+      .order('last_team_name',                     { ascending: true, nullsFirst: false })
+      .order('player_gender',                      { ascending: true, nullsFirst: false })
+      .order('player_last_match_name',             { ascending: true, nullsFirst: false })
       .range(from, from + PAGE - 1)
 
     const playerList = (data as Player[]) || []
@@ -240,7 +242,7 @@ export default function ProfilePicTab({ profile }: Props) {
         .update({ status: 'Pending', operator_id: null, operator_name: null, assigned_to: null, updated_at: now })
         .eq('operator_id', profile.id)
         .eq('category', 'Profile Pic Update')
-        .eq('status', 'In Progress')
+        .in('status', ['In Progress', 'Pending'])
       setClaimMsg('↩️ All your claimed pic jobs moved back to Available')
     } else {
       const ids = Array.from(selected)

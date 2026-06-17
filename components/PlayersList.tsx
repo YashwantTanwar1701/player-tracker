@@ -429,7 +429,8 @@ export default function PlayersList({ profile }: Props) {
       const from = (page - 1) * PAGE
       const { data, count } = await q
         .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
-        .order('last_team_name',                    { ascending: true, nullsFirst: false })
+        .order('last_team_name',                     { ascending: true, nullsFirst: false })
+        .order('player_gender',                      { ascending: true, nullsFirst: false })
         .order('player_last_match_name',             { ascending: true, nullsFirst: false })
         .range(from, from + PAGE - 1)
 
@@ -538,7 +539,7 @@ export default function PlayersList({ profile }: Props) {
         .update({ status: 'Pending', operator_id: null, operator_name: null, assigned_to: null, updated_at: now })
         .eq('operator_id', profile.id)
         .in('category', CORE_CATS)
-        .eq('status', 'In Progress')
+        .in('status', ['In Progress', 'Pending'])  // include Pending too
       if (error) console.error('Unclaim all error:', error)
       setClaimMsg('↩️ All your claimed jobs moved back to Available')
     } else {

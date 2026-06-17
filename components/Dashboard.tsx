@@ -198,9 +198,10 @@ export default function Dashboard() {
           </div>
         </nav>
 
-        {/* Tab bar */}
+        {/* Tab bar — sticky below nav */}
         <div style={{ background: tk.navBg, borderBottom: `1px solid ${tk.border}`,
           padding: '0 24px', display: 'flex', gap: '4px', overflowX: 'auto',
+          position: 'sticky', top: '57px', zIndex: 40,
           transition: 'background 0.2s' }}>
           {tabs.map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
