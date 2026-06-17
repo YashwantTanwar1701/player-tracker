@@ -202,7 +202,7 @@ export default function ProfilePicTab({ profile }: Props) {
         operator_id:   profile.id,
         operator_name: profile.full_name || profile.email,
         updated_by:    profile.id,
-        team:          profile.team,
+        team:          (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
         updated_at:    now,
         completed_at:  isDone ? now : null,
         source_urls:   player.picTask?.source_urls || [],
@@ -303,7 +303,7 @@ export default function ProfilePicTab({ profile }: Props) {
       operator_id:   profile.id,
       operator_name: operatorLabel,
       updated_by:    profile.id,
-      team:          profile.team,
+      team:          (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
       updated_at:    now,
     }))
     const { error } = await supabase.from('player_tasks').upsert(ups, { onConflict: 'player_id,category' })

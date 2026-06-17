@@ -496,7 +496,8 @@ export default function PlayersList({ profile }: Props) {
             operator_id:   profile.id,
             operator_name: operatorLabel,
             updated_by:    profile.id,
-            team:          profile.team,
+            // Admin team is not Cairo/India — save null to avoid constraint violation
+            team:          (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
             updated_at:    now,
           })
         }
