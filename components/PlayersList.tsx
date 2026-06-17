@@ -240,33 +240,14 @@ export default function PlayersList({ profile }: Props) {
   const [filterCat,        setFilterCat]        = useState<Category | 'All'>('All')
   const [filterTournament, setFilterTournament] = useState<string>('') // '' = my active, specific = one
 
-  // Step 1: Load tournaments — use sessionStorage cache to avoid re-fetching on tab switch
+  // Step 1: Load tournaments fresh every time (no cache — ensures newly assigned appear)
   useEffect(() => {
     async function loadTournaments() {
-      // Check session cache first (valid for 5 minutes)
-      try {
-        const cached = sessionStorage.getItem('tournaments_cache')
-        if (cached) {
-          const { data, ts } = JSON.parse(cached)
-          if (Date.now() - ts < 5 * 60 * 1000) {
-            setTournaments(data)
-            setTournamentsReady(true)
-            return
-          }
-        }
-      } catch {}
-
       const { data } = await supabase
         .from('tournament_overview')
         .select('tournament_name, assigned_team, profile_pic_team, is_active')
-      const result = (data || []) as TournamentMeta[]
-      setTournaments(result)
+      setTournaments((data || []) as TournamentMeta[])
       setTournamentsReady(true)
-
-      // Cache for 5 minutes
-      try {
-        sessionStorage.setItem('tournaments_cache', JSON.stringify({ data: result, ts: Date.now() }))
-      } catch {}
     }
     loadTournaments()
   }, [supabase])
@@ -314,9 +295,9 @@ export default function PlayersList({ profile }: Props) {
         // Claimed tasks (for 'claimed' tab)
         claimedQuery,
         // Any claimed player ids (for 'available' exclusion)
-        supabase.from('player_tasks').select('player_id').in('category', CORE_CATS).not('operator_id', 'is', null),
+        supabase.from('player_tasks').select('player_id').in('category', CORE_CATS).not('operator_id', 'is', null).limit(10000),
         // Done tasks (for 'completed' and 'available' exclusion)
-        supabase.from('player_tasks').select('player_id, category, status').in('category', CORE_CATS).not('status', 'in', '(Pending,In Progress)'),
+        supabase.from('player_tasks').select('player_id, category, status').in('category', CORE_CATS).not('status', 'in', '(Pending,In Progress)').limit(10000),
       ])
 
       if (subTab === 'claimed') {
@@ -352,15 +333,18 @@ export default function PlayersList({ profile }: Props) {
         ;(fetchPlayers as any)._excludeIds = new Set([...Array.from(claimedIds), ...Array.from(fullyDoneIds)])
 
       } else if (subTab === 'completed') {
-        // ── COMPLETED TAB: fully task-driven, sorted by completed_at DESC ──
-        // Query player_tasks directly, ordered by completed_at/updated_at DESC
-        // This is the ONLY way to guarantee correct sort order across pages
-        const { data: allDoneTasks, error: doneErr } = await supabase
+        // ── COMPLETED TAB: task-driven sort by completed_at DESC ──
+        // Build tournament filter for this operator first
+        let doneQuery = supabase
           .from('player_tasks')
-          .select('player_id, category, status, completed_at, updated_at, operator_name, operator_id')
+          .select('player_id, category, status, completed_at, updated_at')
           .in('category', CORE_CATS)
           .not('status', 'in', '(Pending,In Progress)')
           .order('completed_at', { ascending: false, nullsFirst: false })
+          .order('updated_at', { ascending: false, nullsFirst: false })
+          .limit(5000)  // cap for performance
+
+        const { data: allDoneTasks, error: doneErr } = await doneQuery
 
         if (doneErr || !allDoneTasks) {
           setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return

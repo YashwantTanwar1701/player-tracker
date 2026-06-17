@@ -119,6 +119,7 @@ export default function ProfilePicTab({ profile }: Props) {
         .not('status', 'in', '(Pending,In Progress)')
         .order('completed_at', { ascending: false, nullsFirst: false })
         .order('updated_at',   { ascending: false, nullsFirst: false })
+        .limit(5000)
 
       // Deduplicate while preserving order
       const seen = new Set<number>()
@@ -315,13 +316,10 @@ export default function ProfilePicTab({ profile }: Props) {
       team:        (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
     }, { onConflict: 'player_id,category' })
 
-    // Also sync URL to the 3 core player task categories
-    const coreCats = ['Date of Birth', 'Height & Weight', 'Hometown Update']
-    for (const cat of coreCats) {
-      await supabase.from('player_tasks')
-        .update({ source_urls: newUrls, updated_at: new Date().toISOString() })
-        .eq('player_id', player.player_id).eq('category', cat)
-    }
+    // Sync URL to all categories in one query (players tab will see it too)
+    await supabase.from('player_tasks')
+      .update({ source_urls: newUrls, updated_at: new Date().toISOString() })
+      .eq('player_id', player.player_id)
 
     setPlayers(prev => prev.map(p =>
       p.player_id === player.player_id
