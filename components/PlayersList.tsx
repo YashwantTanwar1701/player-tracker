@@ -1,54 +1,46 @@
 'use client'
-import { useTheme, T } from '@/components/Dashboard'
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Player, PlayerTask, UserProfile, Status, Category, Team, CATEGORIES, STATUSES, STATUS_COLOR } from '@/types'
+import { Player, PlayerTask, UserProfile, Status, Category, CATEGORIES, STATUSES, STATUS_COLOR } from '@/types'
+import { useTheme, T } from '@/components/Dashboard'
 
 const PAGE = 50
 const DONE_STATUSES: Status[] = ['Yes', 'Already Updated', 'Not Found On Any Source', 'Player Not Found Online', 'Blocked']
+const CORE_CATS = ['Date of Birth', 'Height & Weight', 'Hometown Update']
 
 interface TournamentMeta {
   tournament_name:  string | null
-  assigned_team:    Team | null
-  profile_pic_team: Team | null
-  is_active:        boolean
+  assigned_team:    string | null
+  profile_pic_team: string | null
+  is_active:        boolean | null
 }
 
-function parseArray(val: string | null): string[] {
+// ── TeamIdsCell ──────────────────────────────────────────────────────────────
+function parseArray(val: string | null): number[] {
   if (!val) return []
-  return val.replace(/^\{/, '').replace(/\}$/, '').trim().split(',').map(s => s.trim()).filter(Boolean)
+  try { return JSON.parse(val) } catch { return val.replace(/[{}]/g,'').split(',').map(Number).filter(Boolean) }
 }
 
-const GENDER_MAP: Record<number, string> = { 1: 'Male', 2: 'Female' }
-
-// ── Team IDs tooltip ──────────────────────────────────────────────────────
 function TeamIdsCell({ val }: { val: string | null }) {
-  const theme = useTheme()
-  const tk    = T[theme]
-  const [pos,  setPos]  = useState<{ x: number; y: number } | null>(null)
+  const theme = useTheme(); const tk = T[theme]
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
   const ids = parseArray(val)
-
-  function handleEnter(e: React.MouseEvent) {
-    setPos({ x: e.clientX, y: e.clientY + 12 })
-  }
-
   return (
-    <span style={{ position: 'relative', display: 'inline-block' }}
-      onMouseEnter={handleEnter} onMouseLeave={() => setPos(null)}>
-      <span style={{ background: '#1d4ed8', color: '#fff', fontSize: '11px', fontWeight: 700,
-        padding: '2px 8px', borderRadius: '99px', cursor: 'default' }}>
+    <span style={{ position:'relative', display:'inline-flex', alignItems:'center', gap:'3px' }}
+      onMouseEnter={e => setPos({ x: e.clientX, y: e.clientY + 20 })}
+      onMouseLeave={() => setPos(null)}>
+      <span style={{ background:'#1d4ed8', color:'#fff', borderRadius:'99px', fontSize:'10px',
+        fontWeight:700, padding:'1px 7px', cursor:'default' }}>
         {ids.length}
       </span>
       {pos && ids.length > 0 && (
-        <div style={{ position: 'fixed', left: Math.min(pos.x, window.innerWidth - 300), top: pos.y,
-          zIndex: 99999, background: tk.bgCard, border: `1px solid ${tk.borderLight}`, borderRadius: '8px',
-          padding: '10px 12px', width: '280px', boxShadow: '0 10px 40px rgba(0,0,0,0.9)',
-          pointerEvents: 'none' }}>
-          <p style={{ color: tk.textMuted, fontSize: '10px', margin: '0 0 5px', fontWeight: 700, textTransform: 'uppercase' }}>
+        <div style={{ position:'fixed', left: Math.min(pos.x, window.innerWidth - 300), top: pos.y,
+          zIndex: 99999, background: tk.bgCard, border:`1px solid ${tk.borderLight}`, borderRadius:'8px',
+          padding:'10px 12px', width:'280px', boxShadow:'0 10px 40px rgba(0,0,0,0.9)', pointerEvents:'none' }}>
+          <p style={{ color:tk.textMuted, fontSize:'10px', margin:'0 0 5px', fontWeight:700, textTransform:'uppercase' }}>
             Team IDs ({ids.length})
           </p>
-          <div style={{ color: tk.text, fontSize: '12px', lineHeight: '1.7',
-            maxHeight: '200px', overflowY: 'auto', wordBreak: 'break-all' }}>
+          <div style={{ color:tk.text, fontSize:'12px', lineHeight:'1.7', maxHeight:'200px', overflowY:'auto', wordBreak:'break-all' }}>
             {ids.join(', ')}
           </div>
         </div>
@@ -57,7 +49,7 @@ function TeamIdsCell({ val }: { val: string | null }) {
   )
 }
 
-// ── Progress Cell ─────────────────────────────────────────────────────────
+// ── ProgressCell ─────────────────────────────────────────────────────────────
 interface ProgressCellProps {
   task:     PlayerTask | undefined
   category: Category
@@ -69,15 +61,13 @@ interface ProgressCellProps {
 
 function ProgressCell({ task, category, player, profile, onSaved, readonly }: ProgressCellProps) {
   const supabase = createClient()
-  const theme = useTheme()
-  const tk    = T[theme]
+  const theme    = useTheme(); const tk = T[theme]
+  const sc       = STATUS_COLOR[task?.status || 'Pending']
   const [open,   setOpen]   = useState(false)
   const [status, setStatus] = useState<Status>(task?.status || 'Pending')
   const [notes,  setNotes]  = useState(task?.notes || '')
   const [urls,   setUrls]   = useState<string[]>(task?.source_urls || [])
-  const [newUrl, setNewUrl] = useState('')
   const [saving, setSaving] = useState(false)
-  const [error,  setError]  = useState<string | null>(null)
 
   useEffect(() => {
     setStatus(task?.status || 'Pending')
@@ -85,120 +75,96 @@ function ProgressCell({ task, category, player, profile, onSaved, readonly }: Pr
     setUrls(task?.source_urls || [])
   }, [task])
 
-  const sc = STATUS_COLOR[task?.status || 'Pending']
-
-  function addUrl() {
-    const u = newUrl.trim()
-    if (!u || urls.includes(u)) return
-    setUrls(p => [...p, u])
-    setNewUrl('')
+  if (readonly) {
+    return (
+      <span style={{ background:sc.bg, color:sc.text, fontSize:'11px', fontWeight:600,
+        padding:'3px 9px', borderRadius:'99px', whiteSpace:'nowrap', display:'inline-block' }}>
+        {task?.status || 'Pending'}
+      </span>
+    )
   }
 
   async function save() {
-    setSaving(true); setError(null)
+    setSaving(true)
     const now    = new Date().toISOString()
     const isDone = DONE_STATUSES.includes(status)
-
-    const { data, error: err } = await supabase.from('player_tasks')
-      .upsert({
-        player_id:     player.player_id,
-        category,
-        status,
-        notes,
-        source_urls:   urls,
-        assigned_to:   profile.id,
-        operator_id:   profile.id,
-        operator_name: profile.full_name || profile.email,
-        updated_by:    profile.id,
-        team:          profile.team,
-        updated_at:    now,
-        completed_at:  isDone ? now : null,
-      }, { onConflict: 'player_id,category' })
-      .select().single()
-
-    if (err) { setError(err.message); setSaving(false); return }
-
-    await supabase.from('task_audit_log').insert({
-      task_id:         data.id,
-      player_id:       player.player_id,
-      category,
-      changed_by:      profile.id,
-      changed_by_name: profile.full_name || profile.email,
-      changed_by_team: profile.team,
-      old_status:      task?.status || null,
-      new_status:      status,
-      source_urls:     urls,
-      notes,
-    })
-
-    onSaved(data as PlayerTask)
-    setSaving(false)
-    setOpen(false)
+    const { data, error } = await supabase.from('player_tasks').upsert({
+      player_id: player.player_id, category,
+      status, notes, source_urls: urls,
+      assigned_to: profile.id, operator_id: profile.id,
+      operator_name: profile.full_name || profile.email,
+      updated_by: profile.id,
+      team: (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
+      updated_at: now, completed_at: isDone ? now : null,
+    }, { onConflict: 'player_id,category' }).select().single()
+    if (!error && data) {
+      await supabase.from('task_audit_log').insert({
+        task_id: data.id, player_id: player.player_id, category,
+        changed_by: profile.id, changed_by_name: profile.full_name || profile.email,
+        changed_by_team: profile.team, old_status: task?.status || null, new_status: status,
+        source_urls: urls,
+      })
+      onSaved(data as PlayerTask)
+    }
+    setSaving(false); setOpen(false)
   }
 
   const finp: React.CSSProperties = {
-    width: '100%', background: tk.bgInput, border: `1px solid ${tk.borderLight}`,
-    borderRadius: '8px', padding: '9px 12px', color: '#fff', fontSize: '13px',
-    outline: 'none', boxSizing: 'border-box',
+    width:'100%', background:tk.bgInput, border:`1px solid ${tk.border}`, borderRadius:'8px',
+    padding:'8px 10px', color:tk.text, fontSize:'13px', outline:'none', boxSizing:'border-box',
   }
 
   return (
     <>
-      {readonly ? (
-        <span style={{ background: sc.bg, color: sc.text, fontSize: '11px', fontWeight: 600,
-          padding: '3px 9px', borderRadius: '99px', whiteSpace: 'nowrap',
-          display: 'inline-block', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {task?.status || 'Pending'}
-        </span>
-      ) : (
-        <button onClick={() => setOpen(true)}
-          style={{ background: sc.bg, color: sc.text, fontSize: '11px', fontWeight: 600,
-            padding: '3px 9px', borderRadius: '99px', border: 'none', cursor: 'pointer',
-            whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {task?.status || 'Pending'}
-        </button>
-      )}
-
+      <button onClick={() => setOpen(true)}
+        style={{ background:sc.bg, color:sc.text, fontSize:'11px', fontWeight:600,
+          padding:'3px 9px', borderRadius:'99px', border:'none', cursor:'pointer',
+          whiteSpace:'nowrap', maxWidth:'150px', overflow:'hidden', textOverflow:'ellipsis' }}>
+        {task?.status || 'Pending'}
+      </button>
       {open && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 99999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={e => { if (e.target === e.currentTarget) setOpen(false) }}>
-          <div style={{ background: tk.bgCard, border: `1px solid ${tk.border}`, borderRadius: '16px',
-            padding: '24px', width: '100%', maxWidth: '520px', maxHeight: '90vh', overflowY: 'auto' }}>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:9999,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}
+          onClick={e => { if(e.target===e.currentTarget) setOpen(false) }}>
+          <div style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'16px',
+            padding:'24px', width:'100%', maxWidth:'460px', display:'flex', flexDirection:'column', gap:'14px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div>
-                <h3 style={{ color: '#fff', fontWeight: 700, margin: '0 0 4px', fontSize: '15px' }}>{category}</h3>
-                <p style={{ color: tk.textMuted, fontSize: '12px', margin: 0 }}>{player.full_name} · ID {player.player_id}</p>
+                <h3 style={{ color:tk.text, fontWeight:700, margin:0, fontSize:'15px' }}>{category}</h3>
+                <p style={{ color:tk.textMuted, fontSize:'12px', margin:'3px 0 0' }}>{player.full_name}</p>
               </div>
               <button onClick={() => setOpen(false)}
-                style={{ background: 'none', border: 'none', color: tk.textDim, cursor: 'pointer', fontSize: '22px' }}>×</button>
+                style={{ background:'none', border:'none', color:tk.textDim, cursor:'pointer', fontSize:'22px' }}>×</button>
             </div>
-
-            <div style={{ marginBottom: '14px' }}>
-              <label style={{ display: 'block', color: tk.textMuted, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Status</label>
-              <select value={status} onChange={e => setStatus(e.target.value as Status)} style={finp}>
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+            <div>
+              <label style={{ display:'block', color:tk.textMuted, fontSize:'11px', fontWeight:600,
+                textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'6px' }}>Status</label>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px' }}>
+                {STATUSES.map(s => (
+                  <button key={s} onClick={() => setStatus(s)}
+                    style={{ padding:'5px 12px', borderRadius:'99px', fontSize:'12px', fontWeight:600,
+                      border:'none', cursor:'pointer',
+                      background: status===s ? STATUS_COLOR[s].bg : tk.bgInput,
+                      color: status===s ? STATUS_COLOR[s].text : tk.textMuted,
+                      outline: status===s ? `2px solid ${STATUS_COLOR[s].text}` : 'none' }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
-
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', color: tk.textMuted, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Notes</label>
+            <div style={{ marginBottom:'20px' }}>
+              <label style={{ display:'block', color:tk.textMuted, fontSize:'11px', fontWeight:600,
+                textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'6px' }}>Notes</label>
               <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-                placeholder="Add notes…" style={{ ...finp, resize: 'vertical', fontFamily: 'inherit' }} />
+                placeholder="Optional notes…" style={{ ...finp, resize:'vertical' }} />
             </div>
-
-            {error && (
-              <div style={{ background: '#450a0a', border: '1px solid #7f1d1d', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px' }}>
-                <p style={{ color: '#fca5a5', fontSize: '12px', margin: 0 }}>⚠️ {error}</p>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <div style={{ display:'flex', justifyContent:'flex-end', gap:'10px' }}>
               <button onClick={() => setOpen(false)}
-                style={{ background: tk.bgInput, border: `1px solid ${tk.borderLight}`, color: tk.textMuted, padding: '9px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px' }}>Cancel</button>
+                style={{ background:tk.bgInput, border:`1px solid ${tk.borderLight}`, color:tk.textMuted,
+                  padding:'9px 18px', borderRadius:'8px', cursor:'pointer', fontSize:'13px' }}>Cancel</button>
               <button onClick={save} disabled={saving}
-                style={{ background: '#f97316', border: 'none', color: '#fff', fontWeight: 600, padding: '9px 22px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', opacity: saving ? 0.6 : 1 }}>
+                style={{ background:'#f97316', border:'none', color:'#fff', fontWeight:600,
+                  padding:'9px 22px', borderRadius:'8px', cursor:'pointer', fontSize:'13px', opacity:saving?0.6:1 }}>
                 {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
@@ -209,17 +175,17 @@ function ProgressCell({ task, category, player, profile, onSaved, readonly }: Pr
   )
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 interface Props { profile: UserProfile }
 
 export default function PlayersList({ profile }: Props) {
   const supabase = createClient()
-  const theme = useTheme()
-  const tk    = T[theme]
+  const theme    = useTheme(); const tk = T[theme]
 
-  // State
+  const isAdmin = profile.role === 'admin' || profile.team === 'Admin'
+
   const [tournaments,      setTournaments]      = useState<TournamentMeta[]>([])
-  const [tournamentsReady, setTournamentsReady] = useState(false)
+  const [tourReady,        setTourReady]        = useState(false)
   const [players,          setPlayers]          = useState<Player[]>([])
   const [tasks,            setTasks]            = useState<Record<string, PlayerTask>>({})
   const [total,            setTotal]            = useState(0)
@@ -231,551 +197,436 @@ export default function PlayersList({ profile }: Props) {
   const [subTab,           setSubTab]           = useState<'available' | 'claimed' | 'completed'>('available')
   const [editingUrl,       setEditingUrl]       = useState<Record<string, string>>({})
   const [savingUrl,        setSavingUrl]        = useState<number | null>(null)
-  const DONE_STATUSES_LOCAL: Status[] = ['Yes', 'Already Updated', 'Not Found On Any Source', 'Player Not Found Online', 'Blocked']
-
-  // Filters
   const [search,           setSearch]           = useState('')
   const [filterGender,     setFilterGender]     = useState<'All' | '1' | '2'>('All')
   const [filterStatus,     setFilterStatus]     = useState<Status | 'All'>('All')
   const [filterCat,        setFilterCat]        = useState<Category | 'All'>('All')
-  const [filterTournament, setFilterTournament] = useState<string>('') // '' = my active, specific = one
+  const [filterTournament, setFilterTournament] = useState<string>('')
 
-  // Step 1: Load tournaments fresh every time (no cache — ensures newly assigned appear)
+  // Load tournaments fresh (no cache)
   useEffect(() => {
-    async function loadTournaments() {
-      const { data } = await supabase
-        .from('tournament_overview')
-        .select('tournament_name, assigned_team, profile_pic_team, is_active')
-      setTournaments((data || []) as TournamentMeta[])
-      setTournamentsReady(true)
-    }
-    loadTournaments()
-  }, [supabase])
+    supabase.from('tournament_overview')
+      .select('tournament_name, assigned_team, profile_pic_team, is_active')
+      .then(({ data }) => {
+        setTournaments((data || []) as TournamentMeta[])
+        setTourReady(true)
+      })
+  }, [])
 
-  // Admin = role is admin OR team is Admin
-  const isAdmin = profile.role === 'admin' || profile.team === 'Admin'
-
-  // Tournaments visible to this user (assigned to their team, active only)
-  const myActiveTournaments = tournaments.filter(t =>
-    (isAdmin || t.assigned_team === profile.team) &&
-    t.is_active !== false
+  // My visible tournaments (for operators: only their assigned ones)
+  const myTours = tournaments.filter(t =>
+    t.is_active !== false &&
+    t.assigned_team !== null &&
+    (isAdmin || t.assigned_team === profile.team)
   )
 
-  // All tournaments for admin filter dropdown
-  const activeTournaments = tournaments.filter(t => t.is_active !== false)
-
-  // Step 2: Fetch players — only after tournaments are loaded
   useEffect(() => {
-    if (!tournamentsReady) return
-
-    async function fetchPlayers() {
-      setLoading(true)
-      setSelected(new Set())
-
-      const CORE_CATS = ['Date of Birth', 'Height & Weight', 'Hometown Update']
-
-      // ── Step 1: Determine player_ids from player_tasks based on sub-tab ──
-      // This ensures pagination is accurate — we query tasks DB-first, not players-first
-
-      let eligiblePlayerIds: number[] | null = null // null = no restriction from tasks
-
-      // ── Run all task pre-queries in PARALLEL ──────────────────────────────
-      let claimedQuery = supabase
-        .from('player_tasks')
-        .select('player_id, category, status')
-        .in('category', CORE_CATS)
-        .not('operator_id', 'is', null)
-      if (!isAdmin) claimedQuery = claimedQuery.eq('operator_id', profile.id)
-
-      const [
-        { data: claimedTasks },
-        { data: claimedAny   },
-        { data: doneTasks    },
-      ] = await Promise.all([
-        // Claimed tasks (for 'claimed' tab)
-        claimedQuery,
-        // Any claimed player ids (for 'available' exclusion)
-        supabase.from('player_tasks').select('player_id').in('category', CORE_CATS).not('operator_id', 'is', null).limit(10000),
-        // Done tasks (for 'completed' and 'available' exclusion)
-        supabase.from('player_tasks').select('player_id, category, status').in('category', CORE_CATS).not('status', 'in', '(Pending,In Progress)').limit(10000),
-      ])
-
-      if (subTab === 'claimed') {
-        if (!claimedTasks || claimedTasks.length === 0) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-        const byPlayer: Record<number, { statuses: string[] }> = {}
-        claimedTasks.forEach((t: any) => {
-          if (!byPlayer[t.player_id]) byPlayer[t.player_id] = { statuses: [] }
-          byPlayer[t.player_id].statuses.push(t.status)
-        })
-        eligiblePlayerIds = Object.entries(byPlayer)
-          .filter(([, v]) => !CORE_CATS.every(() =>
-            v.statuses.every(s => DONE_STATUSES_LOCAL.includes(s as Status))
-          ))
-          .map(([id]) => parseInt(id))
-        if (eligiblePlayerIds.length === 0) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-
-      } else if (subTab === 'available') {
-        // Available = players where ALL 3 core tasks are Pending AND operator_id is null
-        // Query directly for accuracy — no exclusion list size limits
-        const { data: availPending } = await supabase
-          .from('player_tasks')
-          .select('player_id, category')
-          .in('category', CORE_CATS)
-          .eq('status', 'Pending')
-          .is('operator_id', null)
-          .limit(20000)
-
-        // Group by player — only include if all 3 core cats are Pending+unclaimed
-        const pendingByPlayer: Record<number, Set<string>> = {}
-        ;(availPending || []).forEach((t: any) => {
-          if (!pendingByPlayer[t.player_id]) pendingByPlayer[t.player_id] = new Set()
-          pendingByPlayer[t.player_id].add(t.category)
-        })
-        eligiblePlayerIds = Object.entries(pendingByPlayer)
-          .filter(([, cats]) => CORE_CATS.every(cat => cats.has(cat)))
-          .map(([id]) => parseInt(id))
-
-        if (eligiblePlayerIds.length === 0) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-
-      } else if (subTab === 'completed') {
-        // ── COMPLETED TAB: task-driven sort by completed_at DESC ──
-        // Build tournament filter for this operator first
-        let doneQuery = supabase
-          .from('player_tasks')
-          .select('player_id, category, status, completed_at, updated_at')
-          .in('category', CORE_CATS)
-          .not('status', 'in', '(Pending,In Progress)')
-          .order('completed_at', { ascending: false, nullsFirst: false })
-          .order('updated_at', { ascending: false, nullsFirst: false })
-          .limit(5000)  // cap for performance
-
-        const { data: allDoneTasks, error: doneErr } = await doneQuery
-
-        if (doneErr || !allDoneTasks) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-
-        // Build map: player_id → max completed_at timestamp
-        const playerTs: Record<number, number> = {}
-        const playerCats: Record<number, Set<string>> = {}
-        allDoneTasks.forEach((t: any) => {
-          if (!playerCats[t.player_id]) playerCats[t.player_id] = new Set()
-          playerCats[t.player_id].add(t.category)
-          const ts = new Date(t.completed_at || t.updated_at || 0).getTime()
-          if (!playerTs[t.player_id] || ts > playerTs[t.player_id]) {
-            playerTs[t.player_id] = ts
-          }
-        })
-
-        // Only fully completed players (all 3 core tasks done), sorted by newest first
-        const sortedIds = Object.entries(playerCats)
-          .filter(([, cats]) => CORE_CATS.every(cat => cats.has(cat)))
-          .sort(([idA], [idB]) => (playerTs[parseInt(idB)] || 0) - (playerTs[parseInt(idA)] || 0))
-          .map(([id]) => parseInt(id))
-
-        const totalCount = sortedIds.length
-        if (totalCount === 0) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-
-        // Apply search filter client-side for completed tab would need player data
-        // Instead: paginate from the sorted ID list, fetch those players
-        const from2 = (page - 1) * PAGE
-        const pageIds = sortedIds.slice(from2, from2 + PAGE)
-        if (pageIds.length === 0) { setPlayers([]); setTotal(totalCount); setTasks({}); setLoading(false); return }
-
-        // Fetch player data for this page
-        const { data: playerData } = await supabase
-          .from('players')
-          .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
-          .in('player_id', pageIds)
-
-        // Re-sort to match sortedIds order (DB .in() doesn't preserve order)
-        const playerMap: Record<number, Player> = {}
-        ;(playerData || []).forEach((p: any) => { playerMap[p.player_id] = p })
-        const orderedPlayers = pageIds.map(id => playerMap[id]).filter(Boolean) as Player[]
-
-        // Fetch tasks
-        const taskMap2: Record<string, PlayerTask> = {}
-        if (pageIds.length > 0) {
-          const { data: taskData } = await supabase
-            .from('player_tasks').select('*').in('player_id', pageIds)
-          ;(taskData || []).forEach((t: PlayerTask) => {
-            taskMap2[`${t.player_id}__${t.category}`] = t
-          })
-        }
-
-        setTasks(taskMap2)
-        setPlayers(orderedPlayers)
-        setTotal(totalCount)
-        setLoading(false)
-        return  // ← skip the rest of fetchPlayers for completed tab
-      }
-
-      // ── Step 2: Build tournament name filter (for available + claimed) ──
-      let tournamentNames: string[] | null = null
-      let includeNull = false
-
-      if (filterTournament === '') {
-        if (myActiveTournaments.length === 0 && !isAdmin) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-        if (!isAdmin) {
-          tournamentNames = myActiveTournaments.map(t => t.tournament_name).filter(Boolean) as string[]
-          includeNull     = myActiveTournaments.some(t => t.tournament_name === null)
-        } else {
-          const assignedTours = tournaments.filter(t => t.assigned_team !== null)
-          if (assignedTours.length === 0) {
-            setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-          }
-          tournamentNames = assignedTours.map(t => t.tournament_name).filter(Boolean) as string[]
-          includeNull     = assignedTours.some(t => t.tournament_name === null)
-        }
-      } else if (filterTournament === 'NULL') {
-        includeNull = true
-      } else {
-        tournamentNames = [filterTournament]
-      }
-
-      // ── Step 3: Query players with all filters ──
-      let q = supabase.from('players').select(
-        'player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name',
-        { count: 'exact' }
-      )
-
-      // Tournament filter
-      if (includeNull && tournamentNames && tournamentNames.length > 0) {
-        q = q.or(`player_last_match_tournament_name.in.(${tournamentNames.map(n => `"${n}"`).join(',')}),player_last_match_tournament_name.is.null`)
-      } else if (includeNull) {
-        q = q.is('player_last_match_tournament_name', null)
-      } else if (tournamentNames && tournamentNames.length > 0) {
-        q = q.in('player_last_match_tournament_name', tournamentNames)
-      }
-
-      // Eligible player_ids filter (from task query above)
-      if (eligiblePlayerIds !== null) {
-        if (eligiblePlayerIds.length === 0) {
-          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-        }
-        q = q.in('player_id', eligiblePlayerIds)
-      }
-
-      // For Available tab: exclude claimed/done players from player query
-      const _excludeIds: Set<number> = (fetchPlayers as any)._excludeIds || new Set()
-      ;(fetchPlayers as any)._excludeIds = undefined
-
-      if (subTab === 'available' && _excludeIds.size > 0) {
-        // Use NOT IN with chunks to avoid URL length limits
-        const excArr = Array.from(_excludeIds)
-        // For large exclude sets, use two passes
-        if (excArr.length <= 1000) {
-          q = q.not('player_id', 'in', `(${excArr.join(',')})`)
-        } else {
-          // Let client-side filter handle large sets after fetch
-          ;(fetchPlayers as any)._clientExclude = _excludeIds
-        }
-      }
-
-      if (search)                 q = q.ilike('full_name', `%${search}%`)
-      if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
-
-      const from = (page - 1) * PAGE
-      const { data, count } = await q
-        .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
-        .order('last_team_name',                     { ascending: true, nullsFirst: false })
-        .order('player_gender',                      { ascending: true, nullsFirst: false })
-        .order('player_last_match_name',             { ascending: true, nullsFirst: false })
-        .range(from, from + PAGE - 1)
-
-      let playerList = (data as Player[]) || []
-
-      // Client-side exclude for large sets
-      const _clientExclude: Set<number> = (fetchPlayers as any)._clientExclude || new Set()
-      ;(fetchPlayers as any)._clientExclude = undefined
-      if (subTab === 'available' && _clientExclude.size > 0) {
-        playerList = playerList.filter(p => !_clientExclude.has(p.player_id))
-      }
-
-      // ── Step 4: Fetch tasks for display ──
-      const taskMap: Record<string, PlayerTask> = {}
-      if (playerList.length > 0) {
-        const ids = playerList.map(p => p.player_id)
-        let tq = supabase.from('player_tasks').select('*').in('player_id', ids)
-        if (filterCat !== 'All') tq = tq.eq('category', filterCat)
-        const { data: taskData } = await tq
-        ;(taskData || []).forEach((t: PlayerTask) => {
-          taskMap[`${t.player_id}__${t.category}`] = t
-        })
-      }
-
-      // Status filter (secondary)
-      let finalPlayers = playerList
-      if (filterStatus !== 'All') {
-        const matchIds = new Set(
-          Object.values(taskMap).filter(t => t.status === filterStatus).map(t => t.player_id)
-        )
-        finalPlayers = playerList.filter(p => matchIds.has(p.player_id))
-      }
-
-      setTasks(taskMap)
-      setPlayers(finalPlayers)
-      setTotal(count || 0)
-      setLoading(false)
-    }
-
+    if (!tourReady) return
     fetchPlayers()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tournamentsReady, page, search, filterGender, filterStatus, filterCat, filterTournament, subTab])
+  }, [tourReady, page, search, filterGender, filterStatus, filterCat, filterTournament, subTab])
 
   useEffect(() => { setPage(1) }, [search, filterGender, filterStatus, filterCat, filterTournament, subTab])
 
-  function handleTaskSaved(updated: PlayerTask) {
-    setTasks(prev => ({ ...prev, [`${updated.player_id}__${updated.category}`]: updated }))
+  async function fetchPlayers() {
+    setLoading(true)
+    setSelected(new Set())
+
+    if (!isAdmin && myTours.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    // ── Build tournament name list ──
+    let tourNames: string[] | null = null
+
+    if (filterTournament !== '') {
+      // Specific tournament selected
+      tourNames = filterTournament === 'NULL' ? [] : [filterTournament]
+    } else if (!isAdmin) {
+      // Operator sees only their assigned tournaments
+      tourNames = myTours.map(t => t.tournament_name).filter(Boolean) as string[]
+    } else {
+      // Admin sees all assigned tournaments
+      tourNames = myTours.map(t => t.tournament_name).filter(Boolean) as string[]
+    }
+
+    if (tourNames !== null && tourNames.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    // ── Handle each sub-tab differently ──
+    if (subTab === 'completed') {
+      await fetchCompleted(tourNames)
+      return
+    }
+
+    if (subTab === 'claimed') {
+      await fetchClaimed(tourNames)
+      return
+    }
+
+    // Available tab
+    await fetchAvailable(tourNames)
   }
 
-  // Bulk claim — set operator and move to In Progress
+  // ── Available: players with ALL 3 core tasks Pending + unclaimed ──────────
+  async function fetchAvailable(tourNames: string[] | null) {
+    // Get all claimed/done player_ids to exclude
+    const [{ data: claimedData }, { data: doneData }] = await Promise.all([
+      supabase.from('player_tasks').select('player_id').in('category', CORE_CATS)
+        .not('operator_id', 'is', null),
+      supabase.from('player_tasks').select('player_id').in('category', CORE_CATS)
+        .not('status', 'in', '(Pending,In Progress)'),
+    ])
+
+    const excludeSet = new Set<number>([
+      ...(claimedData || []).map((t: any) => t.player_id),
+      ...(doneData    || []).map((t: any) => t.player_id),
+    ])
+
+    let q = supabase.from('players')
+      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count:'exact' })
+
+    if (tourNames && tourNames.length > 0) {
+      q = q.in('player_last_match_tournament_name', tourNames)
+    }
+    if (search)                 q = q.ilike('full_name', `%${search}%`)
+    if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
+
+    const from = (page - 1) * PAGE
+    const { data, count } = await q
+      .order('player_last_match_tournament_name', { ascending:true, nullsFirst:false })
+      .order('last_team_name',                     { ascending:true, nullsFirst:false })
+      .order('player_gender',                      { ascending:true, nullsFirst:false })
+      .order('player_last_match_name',             { ascending:true, nullsFirst:false })
+      .range(from, from + PAGE - 1)
+
+    let playerList = (data as Player[]) || []
+
+    // Exclude claimed/done
+    if (excludeSet.size > 0) {
+      playerList = playerList.filter(p => !excludeSet.has(p.player_id))
+    }
+
+    const taskMap: Record<string, PlayerTask> = {}
+    if (playerList.length > 0) {
+      const ids = playerList.map(p => p.player_id)
+      const { data: td } = await supabase.from('player_tasks').select('*').in('player_id', ids)
+      ;(td || []).forEach((t: PlayerTask) => { taskMap[`${t.player_id}__${t.category}`] = t })
+    }
+
+    setTasks(taskMap); setPlayers(playerList); setTotal(count || 0); setLoading(false)
+  }
+
+  // ── Claimed: players where this operator has claimed core tasks ───────────
+  async function fetchClaimed(tourNames: string[] | null) {
+    let tq = supabase.from('player_tasks')
+      .select('player_id, category, status')
+      .in('category', CORE_CATS)
+      .not('operator_id', 'is', null)
+      .not('status', 'in', '('+DONE_STATUSES.map(s=>`${s}`).join(',')+')') // only in-progress
+    if (!isAdmin) tq = tq.eq('operator_id', profile.id)
+
+    const { data: claimedTasks } = await tq
+    if (!claimedTasks || claimedTasks.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    // Keep players where at least 1 core task claimed and not all done
+    const byPlayer: Record<number, Set<string>> = {}
+    claimedTasks.forEach((t: any) => {
+      if (!byPlayer[t.player_id]) byPlayer[t.player_id] = new Set()
+      byPlayer[t.player_id].add(t.category)
+    })
+    const claimedIds = Object.keys(byPlayer).map(Number)
+
+    let q = supabase.from('players')
+      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count:'exact' })
+      .in('player_id', claimedIds)
+
+    if (tourNames && tourNames.length > 0) q = q.in('player_last_match_tournament_name', tourNames)
+    if (search)                 q = q.ilike('full_name', `%${search}%`)
+    if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
+
+    const from = (page - 1) * PAGE
+    const { data, count } = await q
+      .order('player_last_match_tournament_name', { ascending:true, nullsFirst:false })
+      .order('last_team_name',                     { ascending:true, nullsFirst:false })
+      .range(from, from + PAGE - 1)
+
+    const playerList = (data as Player[]) || []
+    const taskMap: Record<string, PlayerTask> = {}
+    if (playerList.length > 0) {
+      const ids = playerList.map(p => p.player_id)
+      const { data: td } = await supabase.from('player_tasks').select('*').in('player_id', ids)
+      ;(td || []).forEach((t: PlayerTask) => { taskMap[`${t.player_id}__${t.category}`] = t })
+    }
+
+    setTasks(taskMap); setPlayers(playerList); setTotal(count || 0); setLoading(false)
+  }
+
+  // ── Completed: players where all 3 core tasks are done, sorted by completed_at DESC ──
+  async function fetchCompleted(tourNames: string[] | null) {
+    const { data: doneTasks } = await supabase
+      .from('player_tasks')
+      .select('player_id, category, completed_at, updated_at')
+      .in('category', CORE_CATS)
+      .not('status', 'in', '(Pending,In Progress)')
+      .order('completed_at', { ascending:false, nullsFirst:false })
+      .limit(5000)
+
+    if (!doneTasks || doneTasks.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    // Build: player_id → {cats done, max ts}
+    const pMap: Record<number, { cats: Set<string>; ts: number }> = {}
+    doneTasks.forEach((t: any) => {
+      if (!pMap[t.player_id]) pMap[t.player_id] = { cats: new Set(), ts: 0 }
+      pMap[t.player_id].cats.add(t.category)
+      const ts = new Date(t.completed_at || t.updated_at || 0).getTime()
+      if (ts > pMap[t.player_id].ts) pMap[t.player_id].ts = ts
+    })
+
+    const sortedIds = Object.entries(pMap)
+      .filter(([, v]) => CORE_CATS.every(c => v.cats.has(c)))
+      .sort(([, a], [, b]) => b.ts - a.ts)
+      .map(([id]) => parseInt(id))
+
+    if (sortedIds.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    const from = (page - 1) * PAGE
+    const pageIds = sortedIds.slice(from, from + PAGE)
+
+    const { data: playerData } = await supabase.from('players')
+      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
+      .in('player_id', pageIds)
+
+    // Apply tournament + search filters
+    let playerList = (playerData || []) as Player[]
+    if (tourNames && tourNames.length > 0) {
+      playerList = playerList.filter(p => tourNames.includes(p.player_last_match_tournament_name || ''))
+    }
+    if (search) {
+      const s = search.toLowerCase()
+      playerList = playerList.filter(p => p.full_name.toLowerCase().includes(s))
+    }
+
+    // Re-sort to match pre-sorted order
+    const orderMap: Record<number, number> = {}
+    pageIds.forEach((id, i) => { orderMap[id] = i })
+    playerList.sort((a, b) => (orderMap[a.player_id] ?? 9999) - (orderMap[b.player_id] ?? 9999))
+
+    const taskMap: Record<string, PlayerTask> = {}
+    if (playerList.length > 0) {
+      const ids = playerList.map(p => p.player_id)
+      const { data: td } = await supabase.from('player_tasks').select('*').in('player_id', ids)
+      ;(td || []).forEach((t: PlayerTask) => { taskMap[`${t.player_id}__${t.category}`] = t })
+    }
+
+    setTasks(taskMap); setPlayers(playerList); setTotal(sortedIds.length); setLoading(false)
+  }
+
+  // ── Task saved callback ───────────────────────────────────────────────────
+  function handleTaskSaved(updated: PlayerTask) {
+    const key = `${updated.player_id}__${updated.category}`
+    setTasks(prev => ({ ...prev, [key]: updated }))
+
+    // If all 3 core tasks now done → move to completed tab
+    const newTasks = { ...tasks, [key]: updated }
+    const dob = newTasks[`${updated.player_id}__Date of Birth`]
+    const htw = newTasks[`${updated.player_id}__Height & Weight`]
+    const htn = newTasks[`${updated.player_id}__Hometown Update`]
+    const allDone = [dob, htw, htn].every(t => t && DONE_STATUSES.includes(t.status))
+    if (allDone && subTab === 'claimed') {
+      setPlayers(prev => prev.filter(p => p.player_id !== updated.player_id))
+    }
+  }
+
+  // ── Claim ─────────────────────────────────────────────────────────────────
   async function claimSelected() {
     if (selected.size === 0) return
     setClaiming(true); setClaimMsg(null)
-    const now  = new Date().toISOString()
-    const ids  = Array.from(selected)
-    const operatorLabel = profile.full_name || profile.email
-    const upserts: any[] = []
+    const ids = Array.from(selected)
+    const now = new Date().toISOString()
+    const opName = profile.full_name || profile.email
+    const opTeam = (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null
 
-    const CORE_CATS: Category[] = ['Date of Birth', 'Height & Weight', 'Hometown Update']
+    const upserts: any[] = []
     for (const pid of ids) {
       for (const cat of CORE_CATS) {
         const existing = tasks[`${pid}__${cat}`]
-        // Only claim tasks that haven't been claimed yet
         if (!existing || existing.status === 'Pending' || !existing.operator_id) {
-          upserts.push({
-            player_id:     pid,
-            category:      cat,
-            status:        'In Progress',
-            assigned_to:   profile.id,
-            operator_id:   profile.id,
-            operator_name: operatorLabel,
-            updated_by:    profile.id,
-            // Admin team is not Cairo/India — save null to avoid constraint violation
-            team:          (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
-            updated_at:    now,
-          })
+          upserts.push({ player_id:pid, category:cat, status:'In Progress',
+            assigned_to:profile.id, operator_id:profile.id, operator_name:opName,
+            updated_by:profile.id, team:opTeam, updated_at:now })
         }
       }
     }
 
     if (upserts.length > 0) {
-      const { error } = await supabase.from('player_tasks')
-        .upsert(upserts, { onConflict: 'player_id,category' })
+      const { error } = await supabase.from('player_tasks').upsert(upserts, { onConflict:'player_id,category' })
       if (error) console.error('Claim error:', error)
     }
 
-    // Refresh tasks for claimed players
-    const { data: taskData } = await supabase
-      .from('player_tasks').select('*').in('player_id', ids)
+    // Refresh tasks + remove claimed from available list
+    const { data: td } = await supabase.from('player_tasks').select('*').in('player_id', ids)
     const newTasks = { ...tasks }
-    ;(taskData || []).forEach((t: PlayerTask) => {
-      newTasks[`${t.player_id}__${t.category}`] = t
-    })
+    ;(td || []).forEach((t: PlayerTask) => { newTasks[`${t.player_id}__${t.category}`] = t })
     setTasks(newTasks)
-
-    // Remove claimed players from Available view immediately (no tab switch, no blank page)
     setPlayers(prev => prev.filter(p => !new Set(ids).has(p.player_id)))
     setTotal(prev => Math.max(0, prev - ids.length))
-    setClaimMsg(`✅ Claimed ${ids.length} player${ids.length > 1 ? 's' : ''} — check the Claimed tab`)
+    setClaimMsg(`✅ Claimed ${ids.length} player${ids.length > 1 ? 's' : ''} — check Claimed tab`)
     setSelected(new Set())
     setClaiming(false)
   }
 
-  // Unclaim — reset tasks back to Pending/unclaimed
-  // mode: 'selected' = only checked rows, 'all' = ALL claimed by me (across all pages)
+  // ── Unclaim ───────────────────────────────────────────────────────────────
   async function unclaim(mode: 'selected' | 'all') {
     setClaiming(true); setClaimMsg(null)
-    const CORE_CATS = ['Date of Birth', 'Height & Weight', 'Hometown Update']
     const now = new Date().toISOString()
+    const reset = { status:'Pending', operator_id:null, operator_name:null, assigned_to:null, updated_at:now }
 
     if (mode === 'all') {
-      // Reset ALL tasks claimed by this operator across all pages
-      const { error } = await supabase.from('player_tasks')
-        .update({ status: 'Pending', operator_id: null, operator_name: null, assigned_to: null, updated_at: now })
-        .eq('operator_id', profile.id)
-        .in('category', CORE_CATS)
-        .in('status', ['In Progress', 'Pending'])  // include Pending too
-      if (error) console.error('Unclaim all error:', error)
-      setClaimMsg('↩️ All your claimed jobs moved back to Available')
+      let q = supabase.from('player_tasks').update(reset).in('category', CORE_CATS)
+        .in('status', ['In Progress', 'Pending'])
+      if (!isAdmin) q = q.eq('operator_id', profile.id)
+      await q
+      setClaimMsg('↩️ All claimed jobs moved back to Available')
     } else {
       const ids = Array.from(selected)
       if (ids.length === 0) { setClaiming(false); return }
-      const { error } = await supabase.from('player_tasks')
-        .update({ status: 'Pending', operator_id: null, operator_name: null, assigned_to: null, updated_at: now })
-        .eq('operator_id', profile.id)
-        .in('player_id', ids)
-        .in('category', CORE_CATS)
-      if (error) console.error('Unclaim selected error:', error)
+      let q = supabase.from('player_tasks').update(reset).in('player_id', ids).in('category', CORE_CATS)
+      if (!isAdmin) q = q.eq('operator_id', profile.id)
+      await q
       setClaimMsg(`↩️ ${ids.length} player${ids.length > 1 ? 's' : ''} moved back to Available`)
     }
 
+    setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
+  }
+
+  // ── Move completed back to available (admin) ──────────────────────────────
+  async function moveCompletedToAvailable() {
+    const ids = Array.from(selected)
+    if (ids.length === 0) return
+    const now = new Date().toISOString()
+    await supabase.from('player_tasks')
+      .update({ status:'Pending', operator_id:null, operator_name:null, assigned_to:null,
+        completed_at:null, updated_at:now })
+      .in('player_id', ids).in('category', CORE_CATS)
+    setPlayers(prev => prev.filter(p => !new Set(ids).has(p.player_id)))
+    setTotal(prev => Math.max(0, prev - ids.length))
     setSelected(new Set())
-    setClaiming(false)
-    setPage(1)
-    setSubTab('available')
+    setClaimMsg(`↩️ ${ids.length} player${ids.length > 1 ? 's' : ''} moved back to Available`)
   }
 
-  function toggleSelect(id: number) {
-    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
-  function toggleAll() {
-    setSelected(selected.size === players.length ? new Set() : new Set(players.map(p => p.player_id)))
-  }
-
-  const totalPages = Math.ceil(total / PAGE)
-
-  const inp: React.CSSProperties = {
-    background: tk.bgInput, border: `1px solid ${tk.borderLight}`, borderRadius: '8px',
-    padding: '7px 11px', color: tk.text, fontSize: '12px', outline: 'none',
-  }
-  const th: React.CSSProperties = {
-    padding: '9px 10px', color: tk.textDim, fontSize: '10px', fontWeight: 700,
-    textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: 'left',
-    background: tk.tableHead, borderBottom: `1px solid ${tk.border}`, whiteSpace: 'nowrap',
-    position: 'sticky', top: 0, zIndex: 10,
-  }
-  const td: React.CSSProperties = {
-    padding: '9px 10px', borderBottom: `1px solid ${tk.tableRow}`,
-    fontSize: '12px', color: tk.textMuted, verticalAlign: 'middle',
-  }
-
+  // ── Save URL ──────────────────────────────────────────────────────────────
   async function saveUrl(playerId: number, existingUrls: string[], isReplace = false) {
     setSavingUrl(playerId)
-    // isReplace=true means existingUrls IS the new list (edit/delete mode)
-    // isReplace=false means we append the typed URL to existingUrls
     let newUrls: string[]
     if (isReplace) {
       newUrls = existingUrls
     } else {
-      const url = editingUrl[playerId]?.trim()
+      const url = editingUrl[String(playerId)]?.trim()
       if (!url) { setSavingUrl(null); return }
       newUrls = existingUrls.includes(url) ? existingUrls : [...existingUrls, url]
     }
+    // Sync URL across all task categories for this player
+    await supabase.from('player_tasks')
+      .update({ source_urls: newUrls, updated_at: new Date().toISOString() })
+      .eq('player_id', playerId)
 
-    // Update all 3 core task categories for this player with the new URLs
-    const catsToUpdate = ['Date of Birth', 'Height & Weight', 'Hometown Update'] as const
-    for (const cat of catsToUpdate) {
-      const task = tasks[`${playerId}__${cat}`]
-      if (task) {
-        await supabase.from('player_tasks')
-          .update({ source_urls: newUrls, updated_at: new Date().toISOString() })
-          .eq('player_id', playerId).eq('category', cat)
-      }
-    }
-
-    // Update local state
     setTasks(prev => {
       const updated = { ...prev }
-      catsToUpdate.forEach(c => {
+      CATEGORIES.forEach(c => {
         const k = `${playerId}__${c}`
         if (updated[k]) updated[k] = { ...updated[k], source_urls: newUrls }
       })
       return updated
     })
-    // Clear the add-new input
-    setEditingUrl(prev => { const n = { ...prev }; delete n[playerId]; return n })
+    setEditingUrl(prev => { const n = { ...prev }; delete n[String(playerId)]; return n })
     setSavingUrl(null)
   }
 
-  if (!tournamentsReady) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px', color: tk.textDim }}>
-        Loading tournament assignments…
-      </div>
-    )
+  function toggleAll() {
+    setSelected(selected.size === players.length ? new Set() : new Set(players.map(p => p.player_id)))
+  }
+  function toggleSelect(id: number) {
+    const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n)
   }
 
-  if (!isAdmin && myActiveTournaments.length === 0) {
-    return (
-      <div style={{ background: tk.bgCard, border: `1px solid ${tk.border}`, borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
-        <div style={{ fontSize: '32px', marginBottom: '12px' }}>🏆</div>
-        <h3 style={{ color: '#fff', fontWeight: 600, margin: '0 0 8px' }}>No Active Tournaments Assigned</h3>
-        <p style={{ color: tk.textDim, fontSize: '13px', margin: 0 }}>
-          Ask your admin to assign active tournaments to <strong style={{ color: '#f97316' }}>{profile.team}</strong>.
-        </p>
-      </div>
-    )
+  // ── Styles ────────────────────────────────────────────────────────────────
+  const inp: React.CSSProperties = {
+    background:tk.bgInput, border:`1px solid ${tk.border}`, borderRadius:'8px',
+    padding:'7px 11px', color:tk.text, fontSize:'12px', outline:'none',
   }
+  const th: React.CSSProperties = {
+    padding:'9px 10px', color:tk.textDim, fontSize:'10px', fontWeight:700,
+    textTransform:'uppercase', letterSpacing:'0.06em', textAlign:'left',
+    background:tk.tableHead, borderBottom:`1px solid ${tk.border}`, whiteSpace:'nowrap',
+    position:'sticky', top:0, zIndex:10,
+  }
+  const td: React.CSSProperties = {
+    padding:'9px 10px', borderBottom:`1px solid ${tk.tableRow}`,
+    fontSize:'12px', color:tk.textMuted, verticalAlign:'middle',
+  }
+
+  // No tournaments assigned
+  if (tourReady && myTours.length === 0) return (
+    <div style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'48px', textAlign:'center' }}>
+      <div style={{ fontSize:'32px', marginBottom:'12px' }}>📋</div>
+      <h3 style={{ color:tk.text, fontWeight:600, margin:'0 0 8px' }}>No Competitions Assigned</h3>
+      <p style={{ color:tk.textMuted, fontSize:'13px', margin:0 }}>
+        {isAdmin ? 'Go to Tournaments tab and assign competitions to Cairo or India.'
+          : `Ask your admin to assign competitions to ${profile.team} in the Tournaments tab.`}
+      </p>
+    </div>
+  )
+
+  const showCheckbox = subTab === 'available' || subTab === 'claimed' || (subTab === 'completed' && isAdmin)
+  const totalPages   = Math.ceil(total / PAGE)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
 
       {/* Sub-tabs */}
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' }}>
         {([
-          { key: 'available', label: '📋 Available', color: tk.borderLight,  desc: 'Unclaimed players — select and claim a batch' },
-          { key: 'claimed',   label: '🙋 Claimed',   color: '#1d4ed8',  desc: 'Your active work — update statuses here' },
-          { key: 'completed', label: '✅ Completed',  color: '#15803d',  desc: 'DOB + Ht/Wt + Hometown all resolved' },
+          { key:'available', label:'📋 Available', color:'#374151' },
+          { key:'claimed',   label:'🙋 Claimed',   color:'#1d4ed8' },
+          { key:'completed', label:'✅ Completed',  color:'#15803d' },
         ] as const).map(t => (
           <button key={t.key} onClick={() => setSubTab(t.key)}
-            style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', cursor: 'pointer',
-              fontSize: '13px', fontWeight: 600,
-              background: subTab === t.key ? t.color : tk.bgInput,
-              color: subTab === t.key ? '#fff' : tk.textMuted }}>
+            style={{ padding:'8px 20px', borderRadius:'8px', border:'none', cursor:'pointer',
+              fontSize:'13px', fontWeight:600,
+              background:subTab===t.key?t.color:tk.bgInput, color:subTab===t.key?'#fff':tk.textMuted }}>
             {t.label}
           </button>
         ))}
-        <span style={{ color: tk.textDim, fontSize: '12px', marginLeft: '4px' }}>
-          {subTab === 'available' ? 'Unclaimed players — select and claim a batch' :
-           subTab === 'claimed'   ? `Your active work (${profile.full_name || profile.email})` :
-           'DOB + Ht/Wt + Hometown all resolved'}
+        <span style={{ color:tk.textDim, fontSize:'12px', marginLeft:'8px' }}>
+          {loading ? 'Loading…' : `${total.toLocaleString('en-US')} players`}
         </span>
       </div>
 
       {/* Filters */}
-      <div style={{ background: tk.bgCard, border: `1px solid ${tk.border}`, borderRadius: '12px', padding: '12px 16px' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
-
+      <div style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'12px 16px' }}>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
           <input type="text" placeholder="🔍 Search player name…" value={search}
-            onChange={e => setSearch(e.target.value)} style={{ ...inp, minWidth: '180px', flex: 1 }} />
+            onChange={e => setSearch(e.target.value)} style={{ ...inp, flex:1, minWidth:'180px' }} />
 
-          {/* Tournament selector */}
+          {/* Tournament filter */}
           <select value={filterTournament} onChange={e => setFilterTournament(e.target.value)}
-            style={{ ...inp, maxWidth: '240px' }}>
+            style={{ ...inp, minWidth:'200px' }}>
             <option value="">
-              {isAdmin ? 'All Active Tournaments' : `My Tournaments (${profile.team})`}
+              {isAdmin ? `All Active Tournaments (${myTours.length})` : `My Tournaments (${profile.team}) — ${myTours.length}`}
             </option>
-            {isAdmin ? (
-              <>
-                <optgroup label="── Cairo ──">
-                  {activeTournaments.filter(t => t.assigned_team === 'Cairo').map(t => (
-                    <option key={t.tournament_name ?? 'NULL'} value={t.tournament_name ?? 'NULL'}>
-                      {t.tournament_name ?? '(No Tournament)'}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="── India ──">
-                  {activeTournaments.filter(t => t.assigned_team === 'India').map(t => (
-                    <option key={t.tournament_name ?? 'NULL'} value={t.tournament_name ?? 'NULL'}>
-                      {t.tournament_name ?? '(No Tournament)'}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="── Unassigned ──">
-                  {activeTournaments.filter(t => !t.assigned_team).map(t => (
-                    <option key={t.tournament_name ?? 'NULL'} value={t.tournament_name ?? 'NULL'}>
-                      {t.tournament_name ?? '(No Tournament)'}
-                    </option>
-                  ))}
-                </optgroup>
-              </>
-            ) : (
-              myActiveTournaments.map(t => (
-                <option key={t.tournament_name ?? 'NULL'} value={t.tournament_name ?? 'NULL'}>
-                  {t.tournament_name ?? '(No Tournament)'}
-                </option>
-              ))
-            )}
+            {(isAdmin ? tournaments.filter(t => t.is_active !== false && t.assigned_team !== null) : myTours).map(t => (
+              <option key={t.tournament_name ?? 'NULL'} value={t.tournament_name ?? 'NULL'}>
+                {t.tournament_name ?? '(No Tournament)'} — {t.assigned_team}
+              </option>
+            ))}
           </select>
 
           <select value={filterGender} onChange={e => setFilterGender(e.target.value as any)} style={inp}>
@@ -784,10 +635,12 @@ export default function PlayersList({ profile }: Props) {
             <option value="2">Female</option>
           </select>
 
-          <select value={filterCat} onChange={e => setFilterCat(e.target.value as any)} style={inp}>
-            <option value="All">All Categories</option>
-            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          {isAdmin && (
+            <select value={filterCat} onChange={e => setFilterCat(e.target.value as any)} style={inp}>
+              <option value="All">All Categories</option>
+              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
 
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)} style={inp}>
             <option value="All">All Statuses</option>
@@ -795,85 +648,85 @@ export default function PlayersList({ profile }: Props) {
           </select>
 
           <button onClick={() => { setSearch(''); setFilterGender('All'); setFilterCat('All'); setFilterStatus('All'); setFilterTournament('') }}
-            style={{ background: 'none', border: 'none', color: tk.textDim, cursor: 'pointer', fontSize: '12px' }}>Clear</button>
+            style={{ background:'none', border:'none', color:tk.textDim, cursor:'pointer', fontSize:'12px' }}>Clear</button>
 
-          <button onClick={() => { setPage(1); }}
-            title="Refresh current view"
-            style={{ background: tk.bgInput, border: `1px solid ${tk.border}`, color: tk.textMuted,
-              padding: '5px 10px', borderRadius: '7px', cursor: 'pointer', fontSize: '12px' }}>
-            🔄
-          </button>
-
-          <span style={{ color: tk.textFaint, fontSize: '12px', marginLeft: 'auto' }}>
-            {loading ? 'Loading…' : `${total.toLocaleString('en-US')} players`}
-          </span>
+          <button onClick={() => fetchPlayers()}
+            title="Refresh" style={{ background:tk.bgInput, border:`1px solid ${tk.border}`, color:tk.textMuted,
+              padding:'5px 10px', borderRadius:'7px', cursor:'pointer', fontSize:'12px' }}>🔄</button>
         </div>
 
-        {/* Claimed tab controls */}
+        {/* Action bars */}
+        {subTab === 'available' && selected.size > 0 && (
+          <div style={{ marginTop:'10px', padding:'10px 14px', background:'#1e3a5f', borderRadius:'8px',
+            border:'1px solid #1d4ed8', display:'flex', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
+            <span style={{ color:'#93c5fd', fontSize:'13px', fontWeight:600 }}>{selected.size} selected</span>
+            <button onClick={claimSelected} disabled={claiming}
+              style={{ background:'#f97316', border:'none', color:'#fff', fontWeight:700, fontSize:'13px',
+                padding:'7px 18px', borderRadius:'8px', cursor:'pointer', opacity:claiming?0.6:1 }}>
+              {claiming ? 'Claiming…' : `🙋 Claim ${selected.size} →`}
+            </button>
+            <button onClick={() => setSelected(new Set())}
+              style={{ background:'none', border:`1px solid ${tk.border}`, color:tk.textMuted,
+                fontSize:'12px', padding:'6px 12px', borderRadius:'8px', cursor:'pointer' }}>Deselect all</button>
+            {claimMsg && <span style={{ color:'#86efac', fontSize:'12px' }}>{claimMsg}</span>}
+          </div>
+        )}
+
         {subTab === 'claimed' && (
-          <div style={{ marginTop: '10px', padding: '10px 14px', background: '#1c1917', borderRadius: '8px',
-            border: '1px solid #44403c', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <span style={{ color: '#a8a29e', fontSize: '12px' }}>
-              {selected.size > 0 ? `${selected.size} selected` : 'Your claimed jobs — update statuses with the dropdowns'}
+          <div style={{ marginTop:'10px', padding:'10px 14px', background:tk.bgInput, borderRadius:'8px',
+            border:`1px solid ${tk.border}`, display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+            <span style={{ color:tk.textMuted, fontSize:'12px' }}>
+              {selected.size > 0 ? `${selected.size} selected` : 'Update statuses using the dropdowns on each row'}
             </span>
-            <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <div style={{ display:'flex', gap:'8px', marginLeft:'auto' }}>
               {selected.size > 0 && (
                 <button onClick={() => unclaim('selected')} disabled={claiming}
-                  style={{ background: '#7c3aed', border: 'none', color: '#fff', fontWeight: 600, fontSize: '12px',
-                    padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', opacity: claiming ? 0.6 : 1 }}>
-                  {claiming ? '…' : `↩️ Unclaim Selected (${selected.size})`}
+                  style={{ background:'#7c3aed', border:'none', color:'#fff', fontWeight:600, fontSize:'12px',
+                    padding:'6px 14px', borderRadius:'8px', cursor:'pointer', opacity:claiming?0.6:1 }}>
+                  {claiming ? '…' : `↩️ Unclaim (${selected.size})`}
                 </button>
               )}
               <button onClick={() => unclaim('all')} disabled={claiming}
-                style={{ background: tk.borderLight, border: '1px solid #4b5563', color: tk.textMuted, fontWeight: 600, fontSize: '12px',
-                  padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', opacity: claiming ? 0.6 : 1 }}>
-                {claiming ? '…' : '↩️ Move ALL My Claimed → Available'}
+                style={{ background:tk.bgInput, border:`1px solid ${tk.border}`, color:tk.textDim, fontWeight:600,
+                  fontSize:'12px', padding:'6px 14px', borderRadius:'8px', cursor:'pointer' }}>
+                ↩️ Move All → Available
               </button>
             </div>
-            {claimMsg && <span style={{ color: '#86efac', fontSize: '12px' }}>{claimMsg}</span>}
+            {claimMsg && <span style={{ color:'#86efac', fontSize:'12px' }}>{claimMsg}</span>}
           </div>
         )}
 
-        {/* Claim bar — only in Available tab */}
-        {subTab === 'available' && selected.size > 0 && (
-          <div style={{ marginTop: '10px', padding: '10px 14px', background: '#1e3a5f', borderRadius: '8px',
-            border: '1px solid #1d4ed8', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <span style={{ color: '#93c5fd', fontSize: '13px', fontWeight: 600 }}>
-              {selected.size} player{selected.size > 1 ? 's' : ''} selected
-            </span>
-            <button onClick={claimSelected} disabled={claiming}
-              style={{ background: '#f97316', border: 'none', color: '#fff', fontWeight: 700, fontSize: '13px',
-                padding: '7px 18px', borderRadius: '8px', cursor: 'pointer', opacity: claiming ? 0.6 : 1 }}>
-              {claiming ? 'Claiming…' : `🙋 Claim ${selected.size} player${selected.size > 1 ? 's' : ''} →`}
+        {subTab === 'completed' && isAdmin && selected.size > 0 && (
+          <div style={{ marginTop:'10px', padding:'10px 14px', background:tk.bgInput, borderRadius:'8px',
+            border:`1px solid ${tk.border}`, display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+            <span style={{ color:tk.textMuted, fontSize:'12px' }}>{selected.size} selected</span>
+            <button onClick={moveCompletedToAvailable}
+              style={{ background:'#7c3aed', border:'none', color:'#fff', fontWeight:600, fontSize:'12px',
+                padding:'6px 14px', borderRadius:'8px', cursor:'pointer', marginLeft:'auto' }}>
+              ↩️ Move Selected Back to Available
             </button>
-            <button onClick={() => setSelected(new Set())}
-              style={{ background: 'none', border: `1px solid ${tk.borderLight}`, color: tk.textMuted, fontSize: '12px',
-                padding: '6px 12px', borderRadius: '8px', cursor: 'pointer' }}>Deselect all</button>
-            {claimMsg && <span style={{ color: '#86efac', fontSize: '12px' }}>{claimMsg}</span>}
+            {claimMsg && <span style={{ color:'#86efac', fontSize:'12px' }}>{claimMsg}</span>}
           </div>
-        )}
-        {claimMsg && selected.size === 0 && (
-          <p style={{ color: '#86efac', fontSize: '12px', margin: '8px 0 0' }}>{claimMsg}</p>
         )}
       </div>
 
       {/* Table */}
-      <div style={{ background: tk.bg, border: `1px solid ${tk.border}`, borderRadius: '12px', overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 300px)', overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1800px' }}>
+      <div style={{ background:tk.bg, border:`1px solid ${tk.border}`, borderRadius:'12px', overflow:'hidden' }}>
+        <div style={{ overflowX:'auto', maxHeight:'calc(100vh - 280px)', overflowY:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'1800px' }}>
             <thead>
               <tr>
-                <th style={{ ...th, width: '36px', textAlign: 'center' }}>
-                  <input type="checkbox" checked={players.length > 0 && selected.size === players.length}
-                    onChange={toggleAll} style={{ accentColor: '#f97316', cursor: 'pointer' }} />
-                </th>
+                {showCheckbox && <th style={{ ...th, width:'36px', textAlign:'center' }}>
+                  <input type="checkbox" checked={players.length>0 && selected.size===players.length}
+                    onChange={toggleAll} style={{ accentColor:'#f97316', cursor:'pointer' }} />
+                </th>}
                 <th style={th}>Player ID</th>
-                <th style={{ ...th, textAlign: 'center', width: '60px' }}>Photo</th>
+                <th style={{ ...th, textAlign:'center', width:'60px' }}>Photo</th>
                 <th style={th}>Full Name</th>
                 <th style={th}>#</th>
                 <th style={th}>Gender</th>
-                <th style={th}>Ht</th>
-                <th style={th}>Wt</th>
+                <th style={th}>HT</th>
+                <th style={th}>WT</th>
                 <th style={th}>Most Team</th>
                 <th style={th}>Team IDs</th>
                 <th style={th}>Last Team</th>
@@ -882,271 +735,206 @@ export default function PlayersList({ profile }: Props) {
                 <th style={th}>Season</th>
                 <th style={th}>Operator</th>
                 <th style={th}>Source URL</th>
-                <th style={{ ...th, borderLeft: '2px solid #374151' }}>🎂 DOB</th>
-                <th style={th}>📏 Ht/Wt</th>
+                <th style={{ ...th, borderLeft:`2px solid ${tk.border}` }}>🗓 DOB</th>
+                <th style={th}>📏 HT/WT</th>
                 <th style={th}>🏠 Hometown</th>
+                {subTab === 'completed' && <th style={th}>Completed At</th>}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                Array.from({ length: 10 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: (subTab === 'completed' && !isAdmin) ? 19 : 20 }).map((_, j) => (
-                    <td key={j} style={td}><div style={{ height: '12px', background: tk.tableHead, borderRadius: '4px' }} /></td>
+                Array.from({ length:8 }).map((_,i) => (
+                  <tr key={i}>{Array.from({ length:showCheckbox?20:19 }).map((_,j) => (
+                    <td key={j} style={td}><div style={{ height:'12px', background:tk.tableRow, borderRadius:'4px' }}/></td>
                   ))}</tr>
                 ))
               ) : players.length === 0 ? (
-                <tr>
-                  <td colSpan={(subTab === 'completed' && !isAdmin) ? 19 : 20} style={{ ...td, textAlign: 'center', color: tk.textFaint, padding: '48px' }}>
-{subTab === 'available' ? 'No unclaimed players — all have been claimed or completed! 🎉' :
-                       subTab === 'claimed'   ? `No active claimed players for ${profile.full_name || profile.email}` :
-                       'No completed players yet'}
-                  </td>
-                </tr>
+                <tr><td colSpan={showCheckbox?20:19}
+                  style={{ ...td, textAlign:'center', color:tk.textFaint, padding:'48px' }}>
+                  {subTab==='available' ? 'No unclaimed players — all claimed or completed! 🎉'
+                    : subTab==='claimed' ? `No claimed players for ${profile.full_name || profile.email}`
+                    : 'No completed players yet'}
+                </td></tr>
               ) : players.map(player => {
                 const dobTask = tasks[`${player.player_id}__Date of Birth`]
                 const htwTask = tasks[`${player.player_id}__Height & Weight`]
                 const htnTask = tasks[`${player.player_id}__Hometown Update`]
-                const isSelected = selected.has(player.player_id)
                 const operatorName = dobTask?.operator_name || htwTask?.operator_name || htnTask?.operator_name || null
-                const allDone = [dobTask, htwTask, htnTask].every(t => t && DONE_STATUSES.includes(t.status))
+                const isSelected   = selected.has(player.player_id)
+                const allDone      = [dobTask, htwTask, htnTask].every(t => t && DONE_STATUSES.includes(t.status))
+
+                const allUrls = Array.from(new Set([
+                  ...(tasks[`${player.player_id}__Date of Birth`]?.source_urls || []),
+                  ...(tasks[`${player.player_id}__Height & Weight`]?.source_urls || []),
+                  ...(tasks[`${player.player_id}__Hometown Update`]?.source_urls || []),
+                ]))
+                const urlVal  = editingUrl[String(player.player_id)] ?? ''
+                const editKey = `edit_${player.player_id}`
+                const editIdx = editingUrl[editKey] !== undefined ? parseInt(editingUrl[editKey]) : -1
 
                 return (
                   <tr key={player.player_id}
-                    style={{ background: isSelected ? 'rgba(249,115,22,0.1)' : allDone ? 'rgba(21,128,61,0.06)' : 'transparent', transition: 'background 0.1s' }}
-                    onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = tk.rowHover }}
-                    onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = allDone ? 'rgba(21,128,61,0.06)' : 'transparent' }}>
+                    style={{ background:isSelected?'rgba(249,115,22,0.08)':'transparent', transition:'background 0.1s' }}
+                    onMouseEnter={e => { if(!isSelected) e.currentTarget.style.background = tk.rowHover }}
+                    onMouseLeave={e => { if(!isSelected) e.currentTarget.style.background = 'transparent' }}>
 
-                    {(subTab === 'available' || subTab === 'claimed' || (subTab === 'completed' && isAdmin)) && (
-                      <td style={{ ...td, textAlign: 'center' }}>
+                    {showCheckbox && (
+                      <td style={{ ...td, textAlign:'center' }}>
                         <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(player.player_id)}
-                          style={{ accentColor: '#f97316', cursor: 'pointer' }} />
+                          style={{ accentColor:'#f97316', cursor:'pointer' }} />
                       </td>
                     )}
 
-                    {/* Player ID — click number to copy, ↗ to open */}
+                    {/* Player ID */}
                     <td style={td}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                        <span
-                          onClick={() => { navigator.clipboard.writeText(String(player.player_id)) }}
-                          title="Click to copy ID"
-                          style={{ color: '#f97316', fontWeight: 700, fontFamily: 'monospace', fontSize: '11px',
-                            cursor: 'pointer', textDecoration: 'underline dotted' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:'3px' }}>
+                        <span onClick={() => navigator.clipboard.writeText(String(player.player_id))}
+                          title="Click to copy" style={{ color:'#f97316', fontWeight:700, fontFamily:'monospace',
+                            fontSize:'11px', cursor:'pointer', textDecoration:'underline dotted' }}>
                           {player.player_id}
                         </span>
                         <a href={`https://data.instatfootball.tv/hockeyplayers?dbs_id=${player.player_id}`}
                           target="_blank" rel="noreferrer"
-                          style={{ color: '#f97316', textDecoration: 'none', fontSize: '11px' }} title="Open in Instat">↗</a>
+                          style={{ color:'#f97316', textDecoration:'none', fontSize:'11px' }} title="Open in Instat">↗</a>
                       </div>
                     </td>
 
                     {/* Photo */}
-                    <td style={{ ...td, textAlign: 'center', width: '60px' }}>
+                    <td style={{ ...td, textAlign:'center', width:'60px' }}>
                       <a href={`https://hockey.instatscout.com/images/players/180/${player.player_id}.png`}
-                        target="_blank" rel="noreferrer" title="View full image">
-                        <img
-                          src={`https://hockey.instatscout.com/images/players/180/${player.player_id}.png`}
+                        target="_blank" rel="noreferrer">
+                        <img src={`https://hockey.instatscout.com/images/players/180/${player.player_id}.png`}
                           alt={player.full_name}
-                          onError={e => {
-                            (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(player.full_name)}&size=40&background=374151&color=9ca3af&bold=true&rounded=true`
-                          }}
-                          style={{ width: '38px', height: '38px', borderRadius: '50%',
-                            objectFit: 'cover', border: `2px solid ${tk.border}`,
-                            display: 'block', margin: '0 auto' }}
+                          onError={e => { (e.target as HTMLImageElement).src =
+                            `https://ui-avatars.com/api/?name=${encodeURIComponent(player.full_name)}&size=40&background=374151&color=9ca3af&bold=true&rounded=true` }}
+                          style={{ width:'38px', height:'38px', borderRadius:'50%', objectFit:'cover',
+                            border:`2px solid ${tk.border}`, display:'block', margin:'0 auto' }}
                         />
                       </a>
                     </td>
 
-                    {/* Full Name — click to Google search "Name + Team" */}
-                    <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      <a
-                        href={`https://www.google.com/search?q=${encodeURIComponent(`${player.full_name} ${player.last_team_name || ''}`.trim())}`}
+                    {/* Full Name */}
+                    <td style={{ ...td, fontWeight:600, whiteSpace:'nowrap' }}>
+                      <a href={`https://www.google.com/search?q=${encodeURIComponent(`${player.full_name} ${player.last_team_name || ''}`.trim())}`}
                         target="_blank" rel="noreferrer"
-                        title={`Google: ${player.full_name} ${player.last_team_name || ''}`}
-                        style={{ color: tk.text, textDecoration: 'none' }}
-                        onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
-                        onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}>
+                        style={{ color:tk.text, textDecoration:'none' }}
+                        onMouseEnter={e => (e.currentTarget.style.textDecoration='underline')}
+                        onMouseLeave={e => (e.currentTarget.style.textDecoration='none')}>
                         {player.full_name}
                       </a>
                     </td>
 
-                    <td style={{ ...td, textAlign: 'center' }}>
+                    <td style={{ ...td, textAlign:'center' }}>
                       {player.club_sweater_num != null
-                        ? <span style={{ background: tk.tableHead, padding: '2px 6px', borderRadius: '4px', fontWeight: 600, color: tk.text, fontSize: '11px' }}>{player.club_sweater_num}</span>
-                        : <span style={{ color: tk.borderLight }}>—</span>}
+                        ? <span style={{ background:tk.tableHead, padding:'2px 6px', borderRadius:'4px', fontWeight:600, color:tk.text, fontSize:'11px' }}>{player.club_sweater_num}</span>
+                        : <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
                     <td style={td}>
                       {player.player_gender != null
-                        ? <span style={{ color: player.player_gender === 1 ? '#60a5fa' : '#f472b6', fontSize: '11px', fontWeight: 600 }}>
-                            {GENDER_MAP[player.player_gender] || player.player_gender}
+                        ? <span style={{ color:player.player_gender===1?'#60a5fa':'#f472b6', fontSize:'11px', fontWeight:600 }}>
+                            {player.player_gender===1?'Male':'Female'}
                           </span>
-                        : <span style={{ color: tk.borderLight }}>—</span>}
+                        : <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
-                    <td style={{ ...td, fontSize: '11px' }}>{player.height != null ? player.height : <span style={{ color: tk.borderLight }}>—</span>}</td>
-                    <td style={{ ...td, fontSize: '11px' }}>{player.weight != null ? player.weight : <span style={{ color: tk.borderLight }}>—</span>}</td>
+                    <td style={{ ...td, fontSize:'11px' }}>{player.height || <span style={{ color:tk.borderLight }}>—</span>}</td>
+                    <td style={{ ...td, fontSize:'11px' }}>{player.weight || <span style={{ color:tk.borderLight }}>—</span>}</td>
 
-                    <td style={{ ...td, color: tk.textMuted, fontFamily: 'monospace', fontSize: '11px' }}>
-                      {player.most_team_id ?? <span style={{ color: tk.borderLight }}>—</span>}
+                    <td style={{ ...td, fontSize:'11px', color:tk.textDim }}>
+                      {player.most_team_id || <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
-                    <td style={{ ...td, textAlign: 'center' }}>
-                      <TeamIdsCell val={player.team_ids} />
+                    <td style={td}><TeamIdsCell val={player.team_ids} /></td>
+
+                    <td style={{ ...td, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {player.last_team_name || <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
-                    <td style={{ ...td, whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {player.last_team_id || player.last_team_name
-                        ? <span>
-                            {player.last_team_id && <span style={{ color: tk.textDim, fontFamily: 'monospace', fontSize: '10px' }}>{player.last_team_id} </span>}
-                            <span style={{ color: tk.text }}>{player.last_team_name || ''}</span>
-                          </span>
-                        : <span style={{ color: tk.borderLight }}>—</span>}
-                    </td>
-
-                    <td style={{ ...td, maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    <td style={{ ...td, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                       title={player.player_last_match_name || ''}>
-                      {player.player_last_match_name || <span style={{ color: tk.borderLight }}>—</span>}
+                      {player.player_last_match_name || <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
-                    <td style={{ ...td, maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      title={player.player_last_match_tournament_name || ''}>
-                      {player.player_last_match_tournament_name
-                        ? <span style={{ color: '#a78bfa', fontSize: '11px' }}>{player.player_last_match_tournament_name}</span>
-                        : <span style={{ color: tk.borderLight, fontStyle: 'italic', fontSize: '11px' }}>—</span>}
+                    <td style={{ ...td, color:'#a78bfa', fontSize:'11px', whiteSpace:'nowrap' }}>
+                      {player.player_last_match_tournament_name || <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
-                    <td style={{ ...td, whiteSpace: 'nowrap', fontSize: '11px', color: tk.textMuted }}>
-                      {player.player_last_match_season_name || <span style={{ color: tk.borderLight }}>—</span>}
+                    <td style={{ ...td, fontSize:'11px', color:tk.textDim, whiteSpace:'nowrap' }}>
+                      {player.player_last_match_season_name || <span style={{ color:tk.borderLight }}>—</span>}
                     </td>
 
+                    {/* Operator */}
                     <td style={td}>
                       {operatorName
-                        ? <span style={{ background: '#1e3a5f', color: '#93c5fd', fontSize: '11px', fontWeight: 600,
-                            padding: '2px 8px', borderRadius: '99px', whiteSpace: 'nowrap' }}>
-                            👤 {operatorName}
-                          </span>
-                        : <span style={{ color: tk.borderLight, fontSize: '11px' }}>—</span>}
+                        ? <span style={{ background:'#1e3a5f', color:'#93c5fd', fontSize:'11px', fontWeight:600,
+                            padding:'2px 8px', borderRadius:'99px', whiteSpace:'nowrap' }}>👤 {operatorName}</span>
+                        : <span style={{ color:tk.borderLight, fontSize:'11px' }}>—</span>}
                     </td>
 
-                    {/* Source URL — with add + edit per URL */}
-                    <td style={{ ...td, minWidth: '200px' }}>
-                      {(() => {
-                        const allUrls = Array.from(new Set([
-                          ...(tasks[`${player.player_id}__Date of Birth`]?.source_urls || []),
-                          ...(tasks[`${player.player_id}__Height & Weight`]?.source_urls || []),
-                          ...(tasks[`${player.player_id}__Hometown Update`]?.source_urls || []),
-                        ]))
-                        const urlVal = editingUrl[String(player.player_id)] ?? ''
-                        const editKey = `edit_${player.player_id}`
-                        const editIdx = editingUrl[editKey] !== undefined ? parseInt(editingUrl[editKey] as string) : -1
-                        return (
-                          <>
-                            {allUrls.map((u, i) => (
-                              editIdx === i ? (
-                                /* Inline edit mode */
-                                <div key={i} style={{ display: 'flex', gap: '3px', marginBottom: '3px' }}>
-                                  <input
-                                    type="url"
-                                    defaultValue={u}
-                                    autoFocus
-                                    id={`edit-url-${player.player_id}-${i}`}
-                                    onKeyDown={e => {
-                                      if (e.key === 'Enter') {
-                                        const val = (e.target as HTMLInputElement).value.trim()
-                                        if (val) {
-                                          const updated = allUrls.map((x, j) => j === i ? val : x)
-                                          saveUrl(player.player_id, updated, true)
-                                        }
-                                        setEditingUrl(prev => { const n = {...prev}; delete n[editKey]; return n })
-                                      }
-                                      if (e.key === 'Escape') setEditingUrl(prev => { const n = {...prev}; delete n[editKey]; return n })
-                                    }}
-                                    style={{ flex: 1, background: '#1d4ed8', border: '1px solid #3b82f6',
-                                      borderRadius: '4px', padding: '3px 6px', color: '#fff', fontSize: '10px', outline: 'none', minWidth: 0 }}
-                                  />
-                                  <button
-                                    onClick={() => {
-                                      const el = document.getElementById(`edit-url-${player.player_id}-${i}`) as HTMLInputElement
-                                      const val = el?.value.trim()
-                                      if (val) {
-                                        const updated = allUrls.map((x, j) => j === i ? val : x)
-                                        saveUrl(player.player_id, updated, true)
-                                      }
-                                      setEditingUrl(prev => { const n = {...prev}; delete n[editKey]; return n })
-                                    }}
-                                    style={{ background: '#15803d', border: 'none', color: '#fff', borderRadius: '4px', padding: '3px 6px', cursor: 'pointer', fontSize: '10px' }}>
-                                    ✓
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingUrl(prev => { const n = {...prev}; delete n[editKey]; return n })}
-                                    style={{ background: tk.borderLight, border: 'none', color: tk.textMuted, borderRadius: '4px', padding: '3px 5px', cursor: 'pointer', fontSize: '10px' }}>
-                                    ✕
-                                  </button>
-                                </div>
-                              ) : (
-                                /* View mode with edit icon */
-                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '3px', marginBottom: '2px' }}>
-                                  <a href={u} target="_blank" rel="noreferrer"
-                                    style={{ color: '#60a5fa', fontSize: '10px', textDecoration: 'none',
-                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}
-                                    title={u}>
-                                    🔗 {u.replace(/^https?:\/\//, '').substring(0, 22)}…
-                                  </a>
-                                  <button
-                                    onClick={() => setEditingUrl(prev => ({ ...prev, [editKey]: String(i) }))}
-                                    title="Edit this URL"
-                                    style={{ background: 'none', border: 'none', color: tk.textFaint, cursor: 'pointer',
-                                      fontSize: '11px', padding: '1px 3px', flexShrink: 0, lineHeight: 1 }}>
-                                    ✏️
-                                  </button>
-                                  <button
-                                    onClick={() => saveUrl(player.player_id, allUrls.filter((_, j) => j !== i), true)}
-                                    title="Remove this URL"
-                                    style={{ background: 'none', border: 'none', color: tk.textFaint, cursor: 'pointer',
-                                      fontSize: '10px', padding: '1px 3px', flexShrink: 0, lineHeight: 1 }}>
-                                    ✕
-                                  </button>
-                                </div>
-                              )
-                            ))}
-                            {/* Add new URL input */}
-                            <div style={{ display: 'flex', gap: '3px', marginTop: allUrls.length > 0 ? '4px' : '0' }}>
-                              <input
-                                type="url"
-                                value={urlVal}
-                                onChange={e => setEditingUrl(prev => ({ ...prev, [String(player.player_id)]: e.target.value }))}
-                                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveUrl(player.player_id, allUrls) } }}
-                                placeholder="Paste source URL…"
-                                style={{ flex: 1, background: tk.tableRow, border: `1px solid ${tk.border}`,
-                                  borderRadius: '6px', padding: '4px 8px', color: tk.textMuted,
-                                  fontSize: '11px', outline: 'none', minWidth: 0 }}
-                              />
-                              {urlVal && (
-                                <button
-                                  onClick={() => saveUrl(player.player_id, allUrls)}
-                                  disabled={savingUrl === player.player_id}
-                                  style={{ background: '#1d4ed8', border: 'none', color: '#fff',
-                                    borderRadius: '5px', padding: '4px 8px', cursor: 'pointer',
-                                    fontSize: '11px', flexShrink: 0 }}>
-                                  {savingUrl === player.player_id ? '…' : '＋'}
-                                </button>
-                              )}
-                            </div>
-                          </>
+                    {/* Source URL */}
+                    <td style={{ ...td, minWidth:'200px' }}>
+                      {allUrls.map((u, i) => (
+                        editIdx === i ? (
+                          <div key={i} style={{ display:'flex', gap:'3px', marginBottom:'3px' }}>
+                            <input type="url" defaultValue={u} autoFocus id={`edit-url-${player.player_id}-${i}`}
+                              onKeyDown={e => {
+                                if (e.key==='Enter') { const v=(e.target as HTMLInputElement).value.trim(); if(v) saveUrl(player.player_id,allUrls.map((x,j)=>j===i?v:x),true); setEditingUrl(prev=>{const n={...prev};delete n[editKey];return n}) }
+                                if (e.key==='Escape') setEditingUrl(prev=>{const n={...prev};delete n[editKey];return n})
+                              }}
+                              style={{ flex:1, background:'#1d4ed8', border:'1px solid #3b82f6', borderRadius:'4px', padding:'3px 6px', color:'#fff', fontSize:'10px', outline:'none', minWidth:0 }}/>
+                            <button onClick={() => { const el=document.getElementById(`edit-url-${player.player_id}-${i}`) as HTMLInputElement; const v=el?.value.trim(); if(v) saveUrl(player.player_id,allUrls.map((x,j)=>j===i?v:x),true); setEditingUrl(prev=>{const n={...prev};delete n[editKey];return n}) }}
+                              style={{ background:'#15803d', border:'none', color:'#fff', borderRadius:'4px', padding:'3px 6px', cursor:'pointer', fontSize:'10px' }}>✓</button>
+                            <button onClick={() => setEditingUrl(prev=>{const n={...prev};delete n[editKey];return n})}
+                              style={{ background:tk.borderLight, border:'none', color:tk.textMuted, borderRadius:'4px', padding:'3px 5px', cursor:'pointer', fontSize:'10px' }}>✕</button>
+                          </div>
+                        ) : (
+                          <div key={i} style={{ display:'flex', alignItems:'center', gap:'3px', marginBottom:'2px' }}>
+                            <a href={u} target="_blank" rel="noreferrer"
+                              style={{ color:'#60a5fa', fontSize:'10px', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, minWidth:0 }} title={u}>
+                              🔗 {u.replace(/^https?:\/\//,'').substring(0,22)}…
+                            </a>
+                            <button onClick={() => setEditingUrl(prev=>({...prev,[editKey]:String(i)}))}
+                              style={{ background:'none', border:'none', color:tk.textFaint, cursor:'pointer', fontSize:'11px', padding:'1px 3px' }}>✏️</button>
+                            <button onClick={() => saveUrl(player.player_id,allUrls.filter((_,j)=>j!==i),true)}
+                              style={{ background:'none', border:'none', color:tk.textFaint, cursor:'pointer', fontSize:'10px', padding:'1px 3px' }}>✕</button>
+                          </div>
                         )
-                      })()}
+                      ))}
+                      <div style={{ display:'flex', gap:'3px', marginTop:allUrls.length>0?'4px':'0' }}>
+                        <input type="url" value={urlVal}
+                          onChange={e => setEditingUrl(prev=>({...prev,[String(player.player_id)]:e.target.value}))}
+                          onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();saveUrl(player.player_id,allUrls)} }}
+                          placeholder="Paste source URL…"
+                          style={{ flex:1, background:tk.bgInput, border:`1px solid ${tk.border}`, borderRadius:'6px', padding:'4px 8px', color:tk.textMuted, fontSize:'11px', outline:'none', minWidth:0 }}/>
+                        {urlVal && (
+                          <button onClick={() => saveUrl(player.player_id,allUrls)} disabled={savingUrl===player.player_id}
+                            style={{ background:'#1d4ed8', border:'none', color:'#fff', borderRadius:'5px', padding:'4px 8px', cursor:'pointer', fontSize:'11px', flexShrink:0 }}>
+                            {savingUrl===player.player_id?'…':'＋'}
+                          </button>
+                        )}
+                      </div>
                     </td>
 
-                    <td style={{ ...td, borderLeft: '2px solid #1f2937' }}>
-                      <ProgressCell task={dobTask} category="Date of Birth" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab === 'available'} />
+                    {/* Progress cells */}
+                    <td style={{ ...td, borderLeft:`2px solid ${tk.border}` }}>
+                      <ProgressCell task={dobTask} category="Date of Birth" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab==='available'} />
                     </td>
                     <td style={td}>
-                      <ProgressCell task={htwTask} category="Height & Weight" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab === 'available'} />
+                      <ProgressCell task={htwTask} category="Height & Weight" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab==='available'} />
                     </td>
                     <td style={td}>
-                      <ProgressCell task={htnTask} category="Hometown Update" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab === 'available'} />
+                      <ProgressCell task={htnTask} category="Hometown Update" player={player} profile={profile} onSaved={handleTaskSaved} readonly={subTab==='available'} />
                     </td>
 
+                    {subTab === 'completed' && (
+                      <td style={{ ...td, whiteSpace:'nowrap', fontSize:'11px', color:tk.textDim }}>
+                        {[dobTask, htwTask, htnTask].map(t => t?.completed_at || t?.updated_at).filter(Boolean).sort().reverse()[0]
+                          ? new Date([dobTask, htwTask, htnTask].map(t => t?.completed_at || t?.updated_at).filter(Boolean).sort().reverse()[0]!)
+                              .toLocaleString('en-IN', { day:'2-digit', month:'short', year:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false })
+                          : '—'}
+                      </td>
+                    )}
                   </tr>
                 )
               })}
@@ -1155,17 +943,22 @@ export default function PlayersList({ profile }: Props) {
         </div>
 
         {/* Pagination */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '10px 16px', borderTop: `1px solid ${tk.border}`, background: tk.bg }}>
-          <span style={{ color: tk.textFaint, fontSize: '12px' }}>
-            {loading ? '…' : `${((page-1)*PAGE+1).toLocaleString('en-US')}–${Math.min(page*PAGE,total).toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
+          padding:'10px 16px', borderTop:`1px solid ${tk.border}`, background:tk.bgCard }}>
+          <span style={{ color:tk.textDim, fontSize:'12px' }}>
+            {loading ? '…' : `${((page-1)*PAGE+1).toLocaleString()}–${Math.min(page*PAGE,total).toLocaleString()} of ${total.toLocaleString()}`}
           </span>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <button onClick={() => setPage(1)} disabled={page===1} style={{ ...inp, cursor:'pointer', opacity:page===1?0.3:1, padding:'5px 10px' }}>«</button>
-            <button onClick={() => setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{ ...inp, cursor:'pointer', opacity:page===1?0.3:1, padding:'5px 12px' }}>‹</button>
-            <span style={{ color:tk.textDim, fontSize:'12px', padding:'5px 8px' }}>{page}/{totalPages||1}</span>
-            <button onClick={() => setPage(p=>Math.min(totalPages,p+1))} disabled={page>=totalPages} style={{ ...inp, cursor:'pointer', opacity:page>=totalPages?0.3:1, padding:'5px 12px' }}>›</button>
-            <button onClick={() => setPage(totalPages)} disabled={page>=totalPages} style={{ ...inp, cursor:'pointer', opacity:page>=totalPages?0.3:1, padding:'5px 10px' }}>»</button>
+          <div style={{ display:'flex', gap:'6px' }}>
+            {[{l:'«',a:()=>setPage(1),d:page<=1},{l:'‹',a:()=>setPage(p=>Math.max(1,p-1)),d:page<=1},
+              {l:'›',a:()=>setPage(p=>Math.min(totalPages,p+1)),d:page>=totalPages},{l:'»',a:()=>setPage(totalPages),d:page>=totalPages}]
+              .map(({l,a,d},i) => (
+                <button key={i} onClick={a} disabled={d}
+                  style={{ background:tk.bgInput, border:`1px solid ${tk.border}`, color:tk.textMuted,
+                    padding:'5px 10px', borderRadius:'6px', cursor:d?'not-allowed':'pointer',
+                    fontSize:'12px', opacity:d?0.35:1 }}>
+                  {l}
+                </button>
+              ))}
           </div>
         </div>
       </div>
