@@ -271,42 +271,52 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Available: players with ALL 3 core tasks Pending + unclaimed ──────────
   async function fetchAvailable(tourNames: string[] | null) {
-    // Get all claimed/done player_ids to exclude
+    // Step 1: Get all tournament player IDs first
+    let tourQ = supabase.from('players').select('player_id')
+    if (tourNames && tourNames.length > 0) {
+      tourQ = tourQ.in('player_last_match_tournament_name', tourNames)
+    }
+    if (search)                 tourQ = tourQ.ilike('full_name', `%${search}%`)
+    if (filterGender !== 'All') tourQ = tourQ.eq('player_gender', parseInt(filterGender))
+
+    const { data: tourPlayers } = await tourQ
+    if (!tourPlayers || tourPlayers.length === 0) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+    const tourIds = tourPlayers.map((p: any) => p.player_id as number)
+
+    // Step 2: Get claimed/done IDs within these players (scoped to tour)
     const [{ data: claimedData }, { data: doneData }] = await Promise.all([
       supabase.from('player_tasks').select('player_id').in('category', CORE_CATS)
-        .not('operator_id', 'is', null),
+        .not('operator_id', 'is', null).in('player_id', tourIds),
       supabase.from('player_tasks').select('player_id').in('category', CORE_CATS)
-        .not('status', 'in', '(Pending,In Progress)'),
+        .not('status', 'in', '(Pending,In Progress)').in('player_id', tourIds),
     ])
 
     const excludeSet = new Set<number>([
-      ...(claimedData || []).map((t: any) => t.player_id),
-      ...(doneData    || []).map((t: any) => t.player_id),
+      ...(claimedData || []).map((t: any) => t.player_id as number),
+      ...(doneData    || []).map((t: any) => t.player_id as number),
     ])
 
-    let q = supabase.from('players')
-      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count:'exact' })
+    // Available IDs = tournament players minus claimed/done
+    const availableIds = tourIds.filter(id => !excludeSet.has(id))
+    const totalCount   = availableIds.length
 
-    if (tourNames && tourNames.length > 0) {
-      q = q.in('player_last_match_tournament_name', tourNames)
-    }
-    if (search)                 q = q.ilike('full_name', `%${search}%`)
-    if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
+    if (totalCount === 0) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    const from = (page - 1) * PAGE
-    const { data, count } = await q
+    // Step 3: Paginate from sorted available list
+    const from    = (page - 1) * PAGE
+    const pageIds = availableIds.slice(from, from + PAGE)
+
+    const { data: playerData } = await supabase.from('players')
+      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
+      .in('player_id', pageIds)
       .order('player_last_match_tournament_name', { ascending:true, nullsFirst:false })
       .order('last_team_name',                     { ascending:true, nullsFirst:false })
       .order('player_gender',                      { ascending:true, nullsFirst:false })
       .order('player_last_match_name',             { ascending:true, nullsFirst:false })
-      .range(from, from + PAGE - 1)
 
-    let playerList = (data as Player[]) || []
-
-    // Exclude claimed/done
-    if (excludeSet.size > 0) {
-      playerList = playerList.filter(p => !excludeSet.has(p.player_id))
-    }
+    const playerList = (playerData || []) as Player[]
 
     const taskMap: Record<string, PlayerTask> = {}
     if (playerList.length > 0) {
@@ -315,7 +325,7 @@ export default function PlayersList({ profile }: Props) {
       ;(td || []).forEach((t: PlayerTask) => { taskMap[`${t.player_id}__${t.category}`] = t })
     }
 
-    setTasks(taskMap); setPlayers(playerList); setTotal(count || 0); setLoading(false)
+    setTasks(taskMap); setPlayers(playerList); setTotal(totalCount); setLoading(false)
   }
 
   // ── Claimed: players where this operator has claimed core tasks ───────────

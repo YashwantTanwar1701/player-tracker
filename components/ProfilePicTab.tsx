@@ -101,12 +101,33 @@ export default function ProfilePicTab({ profile }: Props) {
   }
 
   async function fetchAvailable(tourNames: string[]) {
-    // Get claimed/done IDs to exclude
+    // Step 1: Get ALL available player IDs for these tournaments
+    // Available = status Pending AND operator_id IS NULL
+    // Query player_tasks to get the eligible player set, then intersect with tournament players
+
+    // Get players in these tournaments
+    let tourQ = supabase.from('players')
+      .select('player_id')
+      .in('player_last_match_tournament_name', tourNames)
+    if (search) tourQ = tourQ.ilike('full_name', `%${search}%`)
+    const { data: tourPlayers } = await tourQ
+
+    if (!tourPlayers || tourPlayers.length === 0) {
+      setPlayers([]); setTotal(0); setLoading(false); return
+    }
+
+    const tourPlayerIds = tourPlayers.map((p: any) => p.player_id)
+
+    // Get claimed/done IDs within these tournament players
     const [{ data: takenData }, { data: doneData }] = await Promise.all([
-      supabase.from('player_tasks').select('player_id').eq('category', 'Profile Pic Update')
-        .not('operator_id', 'is', null),
-      supabase.from('player_tasks').select('player_id').eq('category', 'Profile Pic Update')
-        .not('status', 'in', '(Pending,In Progress)'),
+      supabase.from('player_tasks').select('player_id')
+        .eq('category', 'Profile Pic Update')
+        .not('operator_id', 'is', null)
+        .in('player_id', tourPlayerIds),
+      supabase.from('player_tasks').select('player_id')
+        .eq('category', 'Profile Pic Update')
+        .not('status', 'in', '(Pending,In Progress)')
+        .in('player_id', tourPlayerIds),
     ])
 
     const excludeSet = new Set<number>([
@@ -114,26 +135,26 @@ export default function ProfilePicTab({ profile }: Props) {
       ...(doneData  || []).map((t: any) => t.player_id),
     ])
 
-    let q = supabase.from('players')
-      .select('player_id,full_name,club_sweater_num,player_gender,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count:'exact' })
-      .in('player_last_match_tournament_name', tourNames)
+    // Available IDs = tournament players minus claimed/done
+    const availableIds = tourPlayerIds.filter((id: number) => !excludeSet.has(id))
+    const totalCount   = availableIds.length
 
-    if (search) q = q.ilike('full_name', `%${search}%`)
+    if (totalCount === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
 
-    const from = (page - 1) * PAGE
-    const { data, count } = await q
+    // Step 2: Paginate from the available list
+    // Sort the IDs by fetching players in order
+    const from    = (page - 1) * PAGE
+    const pageIds = availableIds.slice(from, from + PAGE)
+
+    const { data: playerData } = await supabase.from('players')
+      .select('player_id,full_name,club_sweater_num,player_gender,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
+      .in('player_id', pageIds)
       .order('player_last_match_tournament_name', { ascending:true, nullsFirst:false })
       .order('last_team_name',                     { ascending:true, nullsFirst:false })
       .order('player_gender',                      { ascending:true, nullsFirst:false })
       .order('player_last_match_name',             { ascending:true, nullsFirst:false })
-      .range(from, from + PAGE - 1)
 
-    let playerList = (data as Player[]) || []
-
-    // Exclude claimed/done
-    if (excludeSet.size > 0) {
-      playerList = playerList.filter(p => !excludeSet.has(p.player_id))
-    }
+    const playerList = (playerData || []) as Player[]
 
     const taskMap: Record<number, PlayerTask> = {}
     if (playerList.length > 0) {
@@ -144,7 +165,7 @@ export default function ProfilePicTab({ profile }: Props) {
     }
 
     setPlayers(playerList.map(p => ({ ...p, picTask: taskMap[p.player_id] })))
-    setTotal(count || 0)
+    setTotal(totalCount)
     setLoading(false)
   }
 
