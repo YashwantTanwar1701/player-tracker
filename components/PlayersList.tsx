@@ -352,20 +352,76 @@ export default function PlayersList({ profile }: Props) {
         ;(fetchPlayers as any)._excludeIds = new Set([...Array.from(claimedIds), ...Array.from(fullyDoneIds)])
 
       } else if (subTab === 'completed') {
-        const doneByPlayer: Record<number, Set<string>> = {}
-        ;(doneTasks || []).forEach((t: any) => {
-          if (!doneByPlayer[t.player_id]) doneByPlayer[t.player_id] = new Set()
-          doneByPlayer[t.player_id].add(t.category)
-        })
-        eligiblePlayerIds = Object.entries(doneByPlayer)
-          .filter(([, cats]) => CORE_CATS.every(c => cats.has(c)))
-          .map(([id]) => parseInt(id))
-        if (eligiblePlayerIds.length === 0) {
+        // ── COMPLETED TAB: fully task-driven, sorted by completed_at DESC ──
+        // Query player_tasks directly, ordered by completed_at/updated_at DESC
+        // This is the ONLY way to guarantee correct sort order across pages
+        const { data: allDoneTasks, error: doneErr } = await supabase
+          .from('player_tasks')
+          .select('player_id, category, status, completed_at, updated_at, operator_name, operator_id')
+          .in('category', CORE_CATS)
+          .not('status', 'in', '(Pending,In Progress)')
+          .order('completed_at', { ascending: false, nullsFirst: false })
+
+        if (doneErr || !allDoneTasks) {
           setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
         }
+
+        // Build map: player_id → max completed_at timestamp
+        const playerTs: Record<number, number> = {}
+        const playerCats: Record<number, Set<string>> = {}
+        allDoneTasks.forEach((t: any) => {
+          if (!playerCats[t.player_id]) playerCats[t.player_id] = new Set()
+          playerCats[t.player_id].add(t.category)
+          const ts = new Date(t.completed_at || t.updated_at || 0).getTime()
+          if (!playerTs[t.player_id] || ts > playerTs[t.player_id]) {
+            playerTs[t.player_id] = ts
+          }
+        })
+
+        // Only fully completed players (all 3 core tasks done), sorted by newest first
+        const sortedIds = Object.entries(playerCats)
+          .filter(([, cats]) => CORE_CATS.every(cat => cats.has(cat)))
+          .sort(([idA], [idB]) => (playerTs[parseInt(idB)] || 0) - (playerTs[parseInt(idA)] || 0))
+          .map(([id]) => parseInt(id))
+
+        const totalCount = sortedIds.length
+        if (totalCount === 0) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+
+        // Apply search filter client-side for completed tab would need player data
+        // Instead: paginate from the sorted ID list, fetch those players
+        const from2 = (page - 1) * PAGE
+        const pageIds = sortedIds.slice(from2, from2 + PAGE)
+        if (pageIds.length === 0) { setPlayers([]); setTotal(totalCount); setTasks({}); setLoading(false); return }
+
+        // Fetch player data for this page
+        const { data: playerData } = await supabase
+          .from('players')
+          .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
+          .in('player_id', pageIds)
+
+        // Re-sort to match sortedIds order (DB .in() doesn't preserve order)
+        const playerMap: Record<number, Player> = {}
+        ;(playerData || []).forEach((p: any) => { playerMap[p.player_id] = p })
+        const orderedPlayers = pageIds.map(id => playerMap[id]).filter(Boolean) as Player[]
+
+        // Fetch tasks
+        const taskMap2: Record<string, PlayerTask> = {}
+        if (pageIds.length > 0) {
+          const { data: taskData } = await supabase
+            .from('player_tasks').select('*').in('player_id', pageIds)
+          ;(taskData || []).forEach((t: PlayerTask) => {
+            taskMap2[`${t.player_id}__${t.category}`] = t
+          })
+        }
+
+        setTasks(taskMap2)
+        setPlayers(orderedPlayers)
+        setTotal(totalCount)
+        setLoading(false)
+        return  // ← skip the rest of fetchPlayers for completed tab
       }
 
-      // ── Step 2: Build tournament name filter ──
+      // ── Step 2: Build tournament name filter (for available + claimed) ──
       let tournamentNames: string[] | null = null
       let includeNull = false
 

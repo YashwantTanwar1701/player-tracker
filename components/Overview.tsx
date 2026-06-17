@@ -188,33 +188,74 @@ export default function Overview({ profile }: Props) {
     })))
 
     // Build operator stats from audit data within range
-    const opMap: Record<string,{name:string;team:string;total:number;player:number;pic:number;players:Set<number>;dob:Set<number>;htw:Set<number>;htn:Set<number>}> = {}
+    // Include status breakdown (Yes, Already Updated, Not Found, etc.)
+    type OpEntry = {
+      name:string; team:string; total:number
+      // Player task counts
+      playerUpdated:Set<number>; playerAlreadyUpdated:Set<number>
+      playerNotFound:Set<number>; playerNotOnline:Set<number>
+      playerBlocked:Set<number>; playerInProgress:Set<number>
+      players:Set<number>
+      // Pic task counts
+      picUpdated:Set<number>; picAlreadyUpdated:Set<number>
+      picNotFound:Set<number>; picNotOnline:Set<number>
+      picBlocked:Set<number>; picInProgress:Set<number>
+      pics:Set<number>
+    }
+    const opMap: Record<string, OpEntry> = {}
     ;(audit||[]).forEach((r:any) => {
       const k = r.changed_by || r.changed_by_name
       if (!k) return
-      if (!opMap[k]) opMap[k] = { name:r.changed_by_name||'Unknown', team:r.changed_by_team||'',
-        total:0, player:0, pic:0,
-        players:new Set(), dob:new Set(), htw:new Set(), htn:new Set() }
+      if (!opMap[k]) opMap[k] = {
+        name:r.changed_by_name||'Unknown', team:r.changed_by_team||'', total:0,
+        playerUpdated:new Set(), playerAlreadyUpdated:new Set(),
+        playerNotFound:new Set(), playerNotOnline:new Set(),
+        playerBlocked:new Set(), playerInProgress:new Set(), players:new Set(),
+        picUpdated:new Set(), picAlreadyUpdated:new Set(),
+        picNotFound:new Set(), picNotOnline:new Set(),
+        picBlocked:new Set(), picInProgress:new Set(), pics:new Set(),
+      }
       opMap[k].total++
-      if (r.category === 'Profile Pic Update') opMap[k].pic++
-      else {
-        opMap[k].player++
-        opMap[k].players.add(r.player_id)
-        if (r.category === 'Date of Birth')     opMap[k].dob.add(r.player_id)
-        if (r.category === 'Height & Weight')   opMap[k].htw.add(r.player_id)
-        if (r.category === 'Hometown Update')   opMap[k].htn.add(r.player_id)
+      const pid = r.player_id
+      const ns  = r.new_status
+      if (r.category === 'Profile Pic Update') {
+        opMap[k].pics.add(pid)
+        if (ns === 'Yes')                      opMap[k].picUpdated.add(pid)
+        else if (ns === 'Already Updated')     opMap[k].picAlreadyUpdated.add(pid)
+        else if (ns === 'Not Found On Any Source') opMap[k].picNotFound.add(pid)
+        else if (ns === 'Player Not Found Online') opMap[k].picNotOnline.add(pid)
+        else if (ns === 'Blocked')             opMap[k].picBlocked.add(pid)
+        else if (ns === 'In Progress')         opMap[k].picInProgress.add(pid)
+      } else {
+        opMap[k].players.add(pid)
+        if (ns === 'Yes')                      opMap[k].playerUpdated.add(pid)
+        else if (ns === 'Already Updated')     opMap[k].playerAlreadyUpdated.add(pid)
+        else if (ns === 'Not Found On Any Source') opMap[k].playerNotFound.add(pid)
+        else if (ns === 'Player Not Found Online') opMap[k].playerNotOnline.add(pid)
+        else if (ns === 'Blocked')             opMap[k].playerBlocked.add(pid)
+        else if (ns === 'In Progress')         opMap[k].playerInProgress.add(pid)
       }
     })
     const opsInRange = Object.values(opMap).map(op => ({
-      name:     op.name,
-      team:     op.team,
-      total:    op.total,
-      player:   op.player,
-      pic:      op.pic,
-      unique_players: op.players.size,
-      dob:      op.dob.size,
-      htw:      op.htw.size,
-      htn:      op.htn.size,
+      name:                op.name,
+      team:                op.team,
+      total:               op.total,
+      // Player stats
+      players:             op.players.size,
+      playerUpdated:       op.playerUpdated.size,
+      playerAlreadyUpdated:op.playerAlreadyUpdated.size,
+      playerNotFound:      op.playerNotFound.size,
+      playerNotOnline:     op.playerNotOnline.size,
+      playerBlocked:       op.playerBlocked.size,
+      playerInProgress:    op.playerInProgress.size,
+      // Pic stats
+      pics:                op.pics.size,
+      picUpdated:          op.picUpdated.size,
+      picAlreadyUpdated:   op.picAlreadyUpdated.size,
+      picNotFound:         op.picNotFound.size,
+      picNotOnline:        op.picNotOnline.size,
+      picBlocked:          op.picBlocked.size,
+      picInProgress:       op.picInProgress.size,
     })).sort((a,b)=>b.total-a.total)
     setRangeOps(opsInRange)
 
@@ -551,40 +592,98 @@ export default function Overview({ profile }: Props) {
             )}
           </div>
 
-          {/* Activity in range table */}
+          {/* Player Tasks table */}
           {card(<>
-            {h3('Operator Activity in Selected Period', `Each row = actions taken during "${rangeLabel}". Unique Players = distinct player IDs touched.`)}
-            {filteredRangeOps.length === 0 ? (
+            {h3('👤 Player Tasks in Period', `Status breakdown per operator during "${rangeLabel}"`)}
+            {filteredRangeOps.filter((op:any)=>op.players>0).length === 0 ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>
-                No activity found in this period. Try a wider range or click 🔄 Refresh.
+                No player task activity in this period.
               </p>
             ) : (
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse' }}>
                   <thead><tr>
-                    {['#','Operator','Team','Total Actions','Unique Players','Player Tasks','Pic Tasks','DOB','Ht/Wt','Hometown'].map(h=>(
+                    {['#','Operator','Team','Players Updated (Count)','Yes (Updated)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
                       <th key={h} style={tH}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
-                    {filteredRangeOps.map((op:any,i:number)=>(
+                    {filteredRangeOps.filter((op:any)=>op.players>0).map((op:any,i:number)=>(
                       <tr key={op.name}
                         onMouseEnter={e=>(e.currentTarget.style.background=tk.rowHover)}
                         onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
                         <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
                         <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
-                        <td style={tD}>
-                          <span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span>
-                        </td>
-                        <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(op.total)}</td>
-                        <td style={{ ...tD, color:'#fb923c', fontWeight:600 }}>{fmt(op.unique_players)}</td>
-                        <td style={{ ...tD, color:'#34d399' }}>{fmt(op.player)}</td>
-                        <td style={{ ...tD, color:'#a78bfa' }}>{fmt(op.pic)}</td>
-                        <td style={tD}>{fmt(op.dob)}</td>
-                        <td style={tD}>{fmt(op.htw)}</td>
-                        <td style={tD}>{fmt(op.htn)}</td>
+                        <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
+                        <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(op.players)}</td>
+                        <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.playerUpdated)}</td>
+                        <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.playerAlreadyUpdated)}</td>
+                        <td style={{ ...tD, color:'#d97706' }}>{fmt(op.playerNotFound)}</td>
+                        <td style={{ ...tD, color:'#7c3aed' }}>{fmt(op.playerNotOnline)}</td>
+                        <td style={{ ...tD, color:'#dc2626' }}>{fmt(op.playerBlocked)}</td>
+                        <td style={{ ...tD, color:'#2563eb' }}>{fmt(op.playerInProgress)}</td>
                       </tr>
                     ))}
+                    {/* Totals row */}
+                    <tr style={{ background: tk.tableHead, fontWeight:700 }}>
+                      <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
+                      <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(filteredRangeOps.filter((o:any)=>o.players>0).reduce((s:number,o:any)=>s+o.players,0))}</td>
+                      <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerUpdated,0))}</td>
+                      <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerAlreadyUpdated,0))}</td>
+                      <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerNotFound,0))}</td>
+                      <td style={{ ...tD, color:'#7c3aed' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerNotOnline,0))}</td>
+                      <td style={{ ...tD, color:'#dc2626' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerBlocked,0))}</td>
+                      <td style={{ ...tD, color:'#2563eb' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerInProgress,0))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>)}
+
+          {/* Profile Pic Tasks table */}
+          {card(<>
+            {h3('📸 Profile Pic Tasks in Period', `Status breakdown per operator during "${rangeLabel}"`)}
+            {filteredRangeOps.filter((op:any)=>op.pics>0).length === 0 ? (
+              <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>
+                No profile pic activity in this period.
+              </p>
+            ) : (
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead><tr>
+                    {['#','Operator','Team','Players Updated (Count)','Yes (Uploaded)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
+                      <th key={h} style={tH}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {filteredRangeOps.filter((op:any)=>op.pics>0).map((op:any,i:number)=>(
+                      <tr key={op.name}
+                        onMouseEnter={e=>(e.currentTarget.style.background=tk.rowHover)}
+                        onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
+                        <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+                        <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
+                        <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
+                        <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(op.pics)}</td>
+                        <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.picUpdated)}</td>
+                        <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.picAlreadyUpdated)}</td>
+                        <td style={{ ...tD, color:'#d97706' }}>{fmt(op.picNotFound)}</td>
+                        <td style={{ ...tD, color:'#7c3aed' }}>{fmt(op.picNotOnline)}</td>
+                        <td style={{ ...tD, color:'#dc2626' }}>{fmt(op.picBlocked)}</td>
+                        <td style={{ ...tD, color:'#2563eb' }}>{fmt(op.picInProgress)}</td>
+                      </tr>
+                    ))}
+                    {/* Totals row */}
+                    <tr style={{ background: tk.tableHead, fontWeight:700 }}>
+                      <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
+                      <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(filteredRangeOps.filter((o:any)=>o.pics>0).reduce((s:number,o:any)=>s+o.pics,0))}</td>
+                      <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picUpdated,0))}</td>
+                      <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picAlreadyUpdated,0))}</td>
+                      <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picNotFound,0))}</td>
+                      <td style={{ ...tD, color:'#7c3aed' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picNotOnline,0))}</td>
+                      <td style={{ ...tD, color:'#dc2626' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picBlocked,0))}</td>
+                      <td style={{ ...tD, color:'#2563eb' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picInProgress,0))}</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>

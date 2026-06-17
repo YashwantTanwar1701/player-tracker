@@ -102,7 +102,7 @@ export default function ProfilePicTab({ profile }: Props) {
       { data: takenData   },
     ] = await Promise.all([
       claimedQuery,
-      supabase.from('player_tasks').select('player_id').eq('category', 'Profile Pic Update').not('status', 'in', '(Pending,In Progress)'),
+      supabase.from('player_tasks').select('player_id, completed_at, updated_at').eq('category', 'Profile Pic Update').not('status', 'in', '(Pending,In Progress)'),
       supabase.from('player_tasks').select('player_id').eq('category', 'Profile Pic Update').not('operator_id', 'is', null),
     ])
 
@@ -111,7 +111,21 @@ export default function ProfilePicTab({ profile }: Props) {
       if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
 
     } else if (subTab === 'completed') {
-      eligibleIds = (doneData || []).map((t: any) => t.player_id)
+      // Task-driven: query player_tasks ordered by completed_at DESC directly
+      const { data: sortedDone } = await supabase
+        .from('player_tasks')
+        .select('player_id, completed_at, updated_at')
+        .eq('category', 'Profile Pic Update')
+        .not('status', 'in', '(Pending,In Progress)')
+        .order('completed_at', { ascending: false, nullsFirst: false })
+        .order('updated_at',   { ascending: false, nullsFirst: false })
+
+      // Deduplicate while preserving order
+      const seen = new Set<number>()
+      eligibleIds = (sortedDone || [])
+        .map((t: any) => t.player_id)
+        .filter((id: number) => { if (seen.has(id)) return false; seen.add(id); return true })
+
       if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
 
     } else {
@@ -165,15 +179,34 @@ export default function ProfilePicTab({ profile }: Props) {
       }
     }
 
-    const from = (page - 1) * PAGE
-    const { data, count } = await q
-      .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
-      .order('last_team_name',                     { ascending: true, nullsFirst: false })
-      .order('player_gender',                      { ascending: true, nullsFirst: false })
-      .order('player_last_match_name',             { ascending: true, nullsFirst: false })
-      .range(from, from + PAGE - 1)
+    // For completed tab: paginate from pre-sorted eligibleIds directly
+    let playerList: Player[] = []
+    let finalCount: number | null = null
 
-    const playerList = (data as Player[]) || []
+    if (subTab === 'completed' && eligibleIds !== null) {
+      const from2 = (page - 1) * PAGE
+      const pageIds = eligibleIds.slice(from2, from2 + PAGE)
+      finalCount = eligibleIds.length
+      if (pageIds.length > 0) {
+        const { data: pd } = await supabase
+          .from('players')
+          .select('player_id,full_name,club_sweater_num,player_gender,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
+          .in('player_id', pageIds)
+        const pm: Record<number, Player> = {}
+        ;(pd || []).forEach((p: any) => { pm[p.player_id] = p })
+        playerList = pageIds.map(id => pm[id]).filter(Boolean) as Player[]
+      }
+    } else {
+      const from = (page - 1) * PAGE
+      const { data, count } = await q
+        .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
+        .order('last_team_name',                     { ascending: true, nullsFirst: false })
+        .order('player_gender',                      { ascending: true, nullsFirst: false })
+        .order('player_last_match_name',             { ascending: true, nullsFirst: false })
+        .range(from, from + PAGE - 1)
+      playerList = (data as Player[]) || []
+      finalCount = count
+    }
 
     // ── Step 3: Fetch pic tasks for display ──
     const taskMap: Record<number, PlayerTask> = {}
@@ -186,7 +219,7 @@ export default function ProfilePicTab({ profile }: Props) {
     }
 
     setPlayers(playerList.map(p => ({ ...p, picTask: taskMap[p.player_id] })))
-    setTotal(count || 0)
+    setTotal(finalCount || 0)
     setLoading(false)
   }
 
@@ -272,14 +305,24 @@ export default function ProfilePicTab({ profile }: Props) {
       const existing = player.picTask?.source_urls || []
       newUrls = existing.includes(url) ? existing : [...existing, url]
     }
+    // Update Profile Pic task
     await supabase.from('player_tasks').upsert({
       player_id:   player.player_id,
       category:    'Profile Pic Update',
       source_urls: newUrls,
       updated_at:  new Date().toISOString(),
       status:      player.picTask?.status || 'Pending',
-      team:        profile.team,
+      team:        (profile.team === 'Cairo' || profile.team === 'India') ? profile.team : null,
     }, { onConflict: 'player_id,category' })
+
+    // Also sync URL to the 3 core player task categories
+    const coreCats = ['Date of Birth', 'Height & Weight', 'Hometown Update']
+    for (const cat of coreCats) {
+      await supabase.from('player_tasks')
+        .update({ source_urls: newUrls, updated_at: new Date().toISOString() })
+        .eq('player_id', player.player_id).eq('category', cat)
+    }
+
     setPlayers(prev => prev.map(p =>
       p.player_id === player.player_id
         ? { ...p, picTask: { ...(p.picTask || {} as PlayerTask), source_urls: newUrls } }
@@ -731,7 +774,7 @@ export default function ProfilePicTab({ profile }: Props) {
                     {subTab === 'completed' && (
                       <td style={{ ...td, color: tk.textDim, fontSize: '11px', whiteSpace: 'nowrap' }}>
                         {task?.completed_at
-                          ? new Date(task.completed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })
+                          ? new Date(task.completed_at).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false })
                           : '—'}
                       </td>
                     )}
