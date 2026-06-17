@@ -464,7 +464,21 @@ export default function PlayersList({ profile }: Props) {
         q = q.in('player_id', eligiblePlayerIds)
       }
 
-      // No client-side exclusion needed — Available tab uses direct status query above
+      // For Available tab: exclude claimed/done players from player query
+      const _excludeIds: Set<number> = (fetchPlayers as any)._excludeIds || new Set()
+      ;(fetchPlayers as any)._excludeIds = undefined
+
+      if (subTab === 'available' && _excludeIds.size > 0) {
+        // Use NOT IN with chunks to avoid URL length limits
+        const excArr = Array.from(_excludeIds)
+        // For large exclude sets, use two passes
+        if (excArr.length <= 1000) {
+          q = q.not('player_id', 'in', `(${excArr.join(',')})`)
+        } else {
+          // Let client-side filter handle large sets after fetch
+          ;(fetchPlayers as any)._clientExclude = _excludeIds
+        }
+      }
 
       if (search)                 q = q.ilike('full_name', `%${search}%`)
       if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
@@ -477,7 +491,14 @@ export default function PlayersList({ profile }: Props) {
         .order('player_last_match_name',             { ascending: true, nullsFirst: false })
         .range(from, from + PAGE - 1)
 
-      const playerList = (data as Player[]) || []
+      let playerList = (data as Player[]) || []
+
+      // Client-side exclude for large sets
+      const _clientExclude: Set<number> = (fetchPlayers as any)._clientExclude || new Set()
+      ;(fetchPlayers as any)._clientExclude = undefined
+      if (subTab === 'available' && _clientExclude.size > 0) {
+        playerList = playerList.filter(p => !_clientExclude.has(p.player_id))
+      }
 
       // ── Step 4: Fetch tasks for display ──
       const taskMap: Record<string, PlayerTask> = {}

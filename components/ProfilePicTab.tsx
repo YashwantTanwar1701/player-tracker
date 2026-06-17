@@ -130,18 +130,13 @@ export default function ProfilePicTab({ profile }: Props) {
       if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
 
     } else {
-      // Available = tasks where status is Pending AND operator_id is null
-      // Query directly instead of exclusion list — more accurate
-      const { data: availData } = await supabase
-        .from('player_tasks')
-        .select('player_id')
-        .eq('category', 'Profile Pic Update')
-        .eq('status', 'Pending')
-        .is('operator_id', null)
-        .limit(10000)
-
-      eligibleIds = Array.from(new Set((availData || []).map((t: any) => t.player_id)))
-      if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
+      // Available: all players in assigned tournaments, excluding claimed/done
+      // Use excludeIds set built from takenData + doneData
+      excludeIds = new Set([
+        ...(takenData || []).map((t: any) => t.player_id),
+        ...(doneData  || []).map((t: any) => t.player_id),
+      ])
+      // eligibleIds stays null — tournament filter drives the player query
     }
 
     // ── Step 2: Query players ──
@@ -191,6 +186,7 @@ export default function ProfilePicTab({ profile }: Props) {
     // For completed tab: paginate from pre-sorted eligibleIds directly
     let playerList: Player[] = []
     let finalCount: number | null = null
+    const largeExclude = subTab === 'available' && excludeIds.size > 1000 ? excludeIds : new Set<number>()
 
     if (subTab === 'completed' && eligibleIds !== null) {
       const from2 = (page - 1) * PAGE
@@ -225,6 +221,11 @@ export default function ProfilePicTab({ profile }: Props) {
         .from('player_tasks').select('*')
         .in('player_id', ids).eq('category', 'Profile Pic Update')
       ;(taskData || []).forEach((t: PlayerTask) => { taskMap[t.player_id] = t })
+    }
+
+    // Client-side filter for large exclude sets (>1000 IDs)
+    if (largeExclude.size > 0) {
+      playerList = playerList.filter(p => !largeExclude.has(p.player_id))
     }
 
     setPlayers(playerList.map(p => ({ ...p, picTask: taskMap[p.player_id] })))
