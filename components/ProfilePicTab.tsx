@@ -130,10 +130,18 @@ export default function ProfilePicTab({ profile }: Props) {
       if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
 
     } else {
-      excludeIds = new Set([
-        ...(takenData || []).map((t: any) => t.player_id),
-        ...(doneData  || []).map((t: any) => t.player_id),
-      ])
+      // Available = tasks where status is Pending AND operator_id is null
+      // Query directly instead of exclusion list — more accurate
+      const { data: availData } = await supabase
+        .from('player_tasks')
+        .select('player_id')
+        .eq('category', 'Profile Pic Update')
+        .eq('status', 'Pending')
+        .is('operator_id', null)
+        .limit(10000)
+
+      eligibleIds = Array.from(new Set((availData || []).map((t: any) => t.player_id)))
+      if (eligibleIds.length === 0) { setPlayers([]); setTotal(0); setLoading(false); return }
     }
 
     // ── Step 2: Query players ──

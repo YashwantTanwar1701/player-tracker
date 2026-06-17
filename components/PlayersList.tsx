@@ -319,18 +319,29 @@ export default function PlayersList({ profile }: Props) {
         }
 
       } else if (subTab === 'available') {
-        const claimedIds = new Set((claimedAny || []).map((t: any) => t.player_id))
-        const doneByPlayer: Record<number, Set<string>> = {}
-        ;(doneTasks || []).forEach((t: any) => {
-          if (!doneByPlayer[t.player_id]) doneByPlayer[t.player_id] = new Set()
-          doneByPlayer[t.player_id].add(t.category)
+        // Available = players where ALL 3 core tasks are Pending AND operator_id is null
+        // Query directly for accuracy — no exclusion list size limits
+        const { data: availPending } = await supabase
+          .from('player_tasks')
+          .select('player_id, category')
+          .in('category', CORE_CATS)
+          .eq('status', 'Pending')
+          .is('operator_id', null)
+          .limit(20000)
+
+        // Group by player — only include if all 3 core cats are Pending+unclaimed
+        const pendingByPlayer: Record<number, Set<string>> = {}
+        ;(availPending || []).forEach((t: any) => {
+          if (!pendingByPlayer[t.player_id]) pendingByPlayer[t.player_id] = new Set()
+          pendingByPlayer[t.player_id].add(t.category)
         })
-        const fullyDoneIds = new Set(
-          Object.entries(doneByPlayer)
-            .filter(([, cats]) => CORE_CATS.every(c => cats.has(c)))
-            .map(([id]) => parseInt(id))
-        )
-        ;(fetchPlayers as any)._excludeIds = new Set([...Array.from(claimedIds), ...Array.from(fullyDoneIds)])
+        eligiblePlayerIds = Object.entries(pendingByPlayer)
+          .filter(([, cats]) => CORE_CATS.every(cat => cats.has(cat)))
+          .map(([id]) => parseInt(id))
+
+        if (eligiblePlayerIds.length === 0) {
+          setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+        }
 
       } else if (subTab === 'completed') {
         // ── COMPLETED TAB: task-driven sort by completed_at DESC ──
@@ -453,15 +464,7 @@ export default function PlayersList({ profile }: Props) {
         q = q.in('player_id', eligiblePlayerIds)
       }
 
-      // For Available tab: push excludeIds into DB query for accurate pagination
-      const excludeIds: Set<number> = (fetchPlayers as any)._excludeIds || new Set()
-      ;(fetchPlayers as any)._excludeIds = undefined
-
-      if (subTab === 'available' && excludeIds.size > 0) {
-        const excArr = Array.from(excludeIds)
-        const CHUNK  = 500
-        q = q.not('player_id', 'in', `(${excArr.slice(0, CHUNK).join(',')})`)
-      }
+      // No client-side exclusion needed — Available tab uses direct status query above
 
       if (search)                 q = q.ilike('full_name', `%${search}%`)
       if (filterGender !== 'All') q = q.eq('player_gender', parseInt(filterGender))
