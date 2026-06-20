@@ -3,12 +3,11 @@ import { useState, useEffect, createContext, useContext } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { UserProfile } from '@/types'
 import PlayersList   from '@/components/PlayersList'
-import ProfilePicTab from '@/components/ProfilePicTab'
 import Tournaments   from '@/components/Tournaments'
 import AdminPanel    from '@/components/AdminPanel'
 import Overview      from '@/components/Overview'
 
-type Tab = 'overview' | 'players' | 'profilepic' | 'tournaments' | 'admin'
+type Tab = 'overview' | 'players' | 'tournaments' | 'admin'
 export type Theme = 'dark' | 'light'
 
 // Theme context so child components can read it
@@ -133,18 +132,20 @@ export default function Dashboard() {
 
   if (!profile) { window.location.href = '/login'; return null }
 
+  const isAdmin = profile.role === 'admin' || profile.team === 'Admin'
   const teamColor = profile.team === 'Cairo' ? '#f97316'
     : profile.team === 'India' ? '#3b82f6' : '#a855f7'
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'overview',    label: '📊 Overview'   },
-    { key: 'players',     label: '👤 Players'     },
-    { key: 'profilepic',  label: '📸 Profile Pic' },
-    { key: 'tournaments', label: '🏆 Tournaments' },
-    ...(profile.role === 'admin' ? [{ key: 'admin' as Tab, label: '⚙️ Admin' }] : []),
+    { key: 'overview',    label: '📊 Overview'    },
+    { key: 'players',     label: '👤 Players'      },
+    ...(isAdmin ? [
+      { key: 'tournaments' as Tab, label: '🏆 Tournaments' },
+      { key: 'admin'       as Tab, label: '⚙️ Admin'       },
+    ] : []),
   ]
 
-  const wide = tab === 'players' || tab === 'profilepic'
+  const wide = tab === 'players'
 
   return (
     <ThemeContext.Provider value={theme}>
@@ -220,8 +221,7 @@ export default function Dashboard() {
           padding: wide ? '16px' : '24px 16px' }}>
           {tab === 'overview'    && <Overview      profile={profile} />}
           {tab === 'players'     && <PlayersList   profile={profile} />}
-          {tab === 'profilepic'  && <ProfilePicTab profile={profile} />}
-          {tab === 'tournaments' && <Tournaments   profile={profile} />}
+            {tab === 'tournaments' && <Tournaments   profile={profile} />}
           {tab === 'admin'       && profile.role === 'admin' && <AdminPanel profile={profile} />}
         </main>
       </div>
