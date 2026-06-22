@@ -93,30 +93,33 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Available ──────────────────────────────────────────────────────────────
   async function doAvailable(tourNames: string[]) {
-    // Get all player IDs in these tournaments
-    let q = supabase.from('players').select('player_id')
-      .in('player_last_match_tournament_name', tourNames)
-    if (search)             q = q.ilike('full_name', `%${search}%`)
-    if (filterGend !== 'All') q = q.eq('player_gender', parseInt(filterGend))
-    const { data: allP } = await q
-    if (!allP?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-    const allIds = allP.map((p:any) => p.player_id as number)
+    // Use Postgres RPC function — does the filtering server-side, no row limits
+    const { data: availData, error } = await supabase
+      .rpc('get_available_player_ids', { tour_names: tourNames })
 
-    // Scoped claimed/done
-    const [{ data: claimed }, { data: done }] = await Promise.all([
-      supabase.from('player_tasks').select('player_id').in('category', CORE)
-        .not('operator_id','is',null).in('player_id', allIds),
-      supabase.from('player_tasks').select('player_id').in('category', CORE)
-        .not('status','in','(Pending,In Progress)').in('player_id', allIds),
-    ])
-    const excl = new Set<number>([
-      ...(claimed||[]).map((t:any)=>t.player_id),
-      ...(done||[]).map((t:any)=>t.player_id),
-    ])
-    const availIds = allIds.filter(id => !excl.has(id))
+    if (error) {
+      console.error('get_available_player_ids error:', error)
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
+    }
+
+    let availIds = (availData || []).map((r: any) => r.player_id as number)
+
+    // Apply search + gender filter client-side (small result set after RPC)
+    if (search || filterGend !== 'All') {
+      // Need player details to filter — fetch names/genders for available IDs
+      if (availIds.length > 0) {
+        let fq = supabase.from('players').select('player_id, full_name, player_gender')
+          .in('player_id', availIds.slice(0, 5000)) // safety cap
+        if (search)               fq = fq.ilike('full_name', `%${search}%`)
+        if (filterGend !== 'All') fq = fq.eq('player_gender', parseInt(filterGend))
+        const { data: filtered } = await fq
+        availIds = (filtered || []).map((p: any) => p.player_id as number)
+      }
+    }
+
     if (!availIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    const from = (page-1)*PAGE
+    const from    = (page-1)*PAGE
     const pageIds = availIds.slice(from, from+PAGE)
     const { data: pd } = await supabase.from('players')
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
