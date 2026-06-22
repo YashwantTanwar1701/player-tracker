@@ -8,7 +8,6 @@ interface TournamentRow {
   tournament_name:  string | null
   player_count:     number
   assigned_team:    Team | null
-  profile_pic_team: Team | null
   is_active:        boolean | null
   assigned_by_name: string | null
   assigned_at:      string | null
@@ -30,7 +29,7 @@ export default function Tournaments({ profile }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving,  setSaving]  = useState<string | null>(null)
   const [search,  setSearch]  = useState('')
-  const [filter,  setFilter]  = useState<'All' | 'Active' | 'Cairo' | 'India' | 'Unassigned'>('Active')
+  const [filter,  setFilter]  = useState<'All' | 'Active' | 'Cairo' | 'India' | 'Unassigned'>('All')
   const [msg,     setMsg]     = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const load = useCallback(async () => {
@@ -65,7 +64,6 @@ export default function Tournaments({ profile }: Props) {
       updated_at:       new Date().toISOString(),
       // Keep existing values unless overridden by patch
       assigned_team:    currentRow?.assigned_team    ?? null,
-      profile_pic_team: currentRow?.profile_pic_team ?? null,
       is_active:        currentRow?.is_active        ?? true,
       ...patch,
     }
@@ -109,26 +107,13 @@ export default function Tournaments({ profile }: Props) {
     setSaving(null)
   }
 
-  async function assignPicTeam(tournamentName: string | null, team: Team | null) {
-    const current = rows.find(r => r.tournament_name === tournamentName)
-    const ok = await upsertTournament(tournamentName, {
-      profile_pic_team: team,
-      assigned_team:    current?.assigned_team,
-      is_active:        current?.is_active ?? true,
-    })
-    if (!ok) return
-    setRows(prev => prev.map(r => r.tournament_name === tournamentName ? { ...r, profile_pic_team: team } : r))
-    setSaving(null)
-  }
-
   async function toggleActive(tournamentName: string | null, current: boolean | null) {
     const newVal = !(current ?? true)
     const row    = rows.find(r => r.tournament_name === tournamentName)
     const ok     = await upsertTournament(tournamentName, {
       is_active:        newVal,
       assigned_team:    row?.assigned_team,
-      profile_pic_team: row?.profile_pic_team,
-    })
+        })
     if (!ok) return
     setRows(prev => prev.map(r => r.tournament_name === tournamentName ? { ...r, is_active: newVal } : r))
     setMsg({ type: 'ok', text: `${newVal ? '✅ Activated' : '⏸ Deactivated'}: "${tournamentName ?? 'No Tournament'}"` })
@@ -238,7 +223,6 @@ export default function Tournaments({ profile }: Props) {
                 <th style={th}>Tournament</th>
                 <th style={{ ...th, textAlign: 'center' }}>Players</th>
                 <th style={{ ...th, textAlign: 'center' }}>Assigned Team</th>
-                <th style={{ ...th, textAlign: 'center' }}>📸 Pic Team</th>
                 <th style={{ ...th, textAlign: 'center' }}>Active</th>
                 <th style={th}>Pending Tasks</th>
                 <th style={th}>Progress</th>
@@ -303,25 +287,7 @@ export default function Tournaments({ profile }: Props) {
                         : <span style={{ color:tk.textFaint, fontSize:'12px', fontStyle:'italic' }}>—</span>}
                     </td>
 
-                    {/* Profile pic team */}
-                    <td style={{ ...td, textAlign:'center' }}>
-                      {isAdmin ? (
-                        <select value={row.profile_pic_team || ''} disabled={isBusy}
-                          onChange={e => assignPicTeam(row.tournament_name, (e.target.value as Team) || null)}
-                          style={{ background: tk.bgInput, border: `1px solid ${tk.borderLight}`, borderRadius: '6px',
-                            padding: '4px 8px', color: tk.text, fontSize: '11px', cursor: 'pointer', outline: 'none' }}>
-                          <option value="">— None —</option>
-                          <option value="Cairo">Cairo</option>
-                          <option value="India">India</option>
-                        </select>
-                      ) : (
-                        row.profile_pic_team
-                          ? <span style={{ background: TEAM_COLOR[row.profile_pic_team], color:'#fff', fontWeight:600, fontSize:'11px', padding:'3px 10px', borderRadius:'99px' }}>
-                              {row.profile_pic_team}
-                            </span>
-                          : <span style={{ color:tk.textFaint, fontSize:'11px' }}>—</span>
-                      )}
-                    </td>
+
 
                     {/* Active toggle */}
                     <td style={{ ...td, textAlign:'center' }}>
