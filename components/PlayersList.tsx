@@ -261,14 +261,14 @@ export default function PlayersList({ profile }: Props) {
         new_status: modalStatus, source_urls: data.source_urls||[],
       })
       setTasks(prev => ({ ...prev, [`${player.player_id}__${cat}`]: data as PlayerTask }))
-      // Move out of claimed if all core done
+      // Move out of claimed only when ALL 4 categories are done
       if (subTab === 'claimed') {
         const newTasks = { ...tasks, [`${player.player_id}__${cat}`]: data as PlayerTask }
-        const allCoreDone = CORE.every(c => {
+        const allDone = ALL4.every(c => {
           const t = newTasks[`${player.player_id}__${c}`]
           return t && DONE.includes(t.status)
         })
-        if (allCoreDone) setPlayers(prev=>prev.filter(p=>p.player_id!==player.player_id))
+        if (allDone) setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
       }
     }
     setSavingModal(false); setOpenModal(null)
