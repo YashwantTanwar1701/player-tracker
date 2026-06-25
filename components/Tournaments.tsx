@@ -200,9 +200,15 @@ export default function Tournaments({ profile }: Props) {
             {f}
           </button>
         ))}
-        <span style={{ color: tk.textFaint, fontSize: '12px', marginLeft: 'auto' }}>
+        <span style={{ color: tk.textFaint, fontSize: '12px' }}>
           {loading ? 'Loading…' : `${filtered.length} competitions`}
         </span>
+        <button onClick={() => load()} disabled={loading}
+          style={{ background: tk.bgInput, border: `1px solid ${tk.border}`, color: tk.textMuted,
+            padding: '5px 12px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer',
+            fontSize: '12px', fontWeight: 600, marginLeft: 'auto', opacity: loading ? 0.6 : 1 }}>
+          🔄 Refresh
+        </button>
       </div>
 
       {msg && (

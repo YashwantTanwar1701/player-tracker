@@ -106,11 +106,14 @@ export default function PlayersList({ profile }: Props) {
 
     // Apply search + gender filter client-side (small result set after RPC)
     if (search || filterGend !== 'All') {
-      // Need player details to filter — fetch names/genders for available IDs
       if (availIds.length > 0) {
         let fq = supabase.from('players').select('player_id, full_name, player_gender')
-          .in('player_id', availIds.slice(0, 5000)) // safety cap
-        if (search)               fq = fq.ilike('full_name', `%${search}%`)
+          .in('player_id', availIds.slice(0, 5000))
+        if (search) {
+          const pid = parseInt(search)
+          if (!isNaN(pid)) fq = fq.eq('player_id', pid)
+          else             fq = fq.ilike('full_name', `%${search}%`)
+        }
         if (filterGend !== 'All') fq = fq.eq('player_gender', parseInt(filterGend))
         const { data: filtered } = await fq
         availIds = (filtered || []).map((p: any) => p.player_id as number)
@@ -148,7 +151,7 @@ export default function PlayersList({ profile }: Props) {
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name',{count:'exact'})
       .in('player_id', claimedIds)
       .in('player_last_match_tournament_name', tourNames)
-    if (search) q = q.ilike('full_name',`%${search}%`)
+    if (search) { const pid = parseInt(search); if (!isNaN(pid)) q = q.eq('player_id', pid); else q = q.ilike('full_name', `%${search}%`) }
     const from = (page-1)*PAGE
     const { data:pd, count } = await q
       .order('player_last_match_tournament_name',{ascending:true,nullsFirst:false})
@@ -162,13 +165,13 @@ export default function PlayersList({ profile }: Props) {
     // Cap at COMP_LIMIT rows for performance
     const { data: doneTasks } = await supabase
       .from('player_tasks').select('player_id, category, completed_at, updated_at')
-      .in('category', CORE).not('status','in','(Pending,In Progress)')
+      .in('category', ALL4).not('status','in','(Pending,In Progress)')
       .order('completed_at',{ascending:false,nullsFirst:false})
       .limit(COMP_LIMIT * 3)  // fetch extra to account for deduplication
 
     if (!doneTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    // Group: player must have all 3 core done
+    // Group: player must have all 4 categories done
     const pMap: Record<number,{cats:Set<string>;ts:number}> = {}
     doneTasks.forEach((t:any) => {
       if (!pMap[t.player_id]) pMap[t.player_id]={cats:new Set(),ts:0}
@@ -177,7 +180,7 @@ export default function PlayersList({ profile }: Props) {
       if (ts > pMap[t.player_id].ts) pMap[t.player_id].ts = ts
     })
     let sortedIds = Object.entries(pMap)
-      .filter(([,v]) => CORE.every(c=>v.cats.has(c)))
+      .filter(([,v]) => ALL4.every(c=>v.cats.has(c)))
       .sort(([,a],[,b])=>b.ts-a.ts)
       .map(([id])=>parseInt(id))
       .slice(0, COMP_LIMIT)
@@ -281,12 +284,11 @@ export default function PlayersList({ profile }: Props) {
     const ups: any[] = []
     for (const pid of ids) {
       for (const cat of ALL4) {
-        const ex = tasks[`${pid}__${cat}`]
-        if (!ex || ex.status === 'Pending' || !ex.operator_id) {
-          ups.push({ player_id:pid, category:cat, status:'In Progress',
-            assigned_to:profile.id, operator_id:profile.id, operator_name:opLabel,
-            updated_by:profile.id, team:opTeam, updated_at:now })
-        }
+        // Always upsert - sets all 4 categories to In Progress for this operator
+        ups.push({ player_id:pid, category:cat, status:'In Progress',
+          assigned_to:profile.id, operator_id:profile.id, operator_name:opLabel,
+          updated_by:profile.id, team:opTeam, updated_at:now,
+          completed_at: null })  // clear any previous completion
       }
     }
     if (ups.length) await supabase.from('player_tasks').upsert(ups,{onConflict:'player_id,category'})
@@ -305,20 +307,23 @@ export default function PlayersList({ profile }: Props) {
   async function unclaim(mode:'sel'|'all') {
     setClaiming(true); setMsg(null)
     const now = new Date().toISOString()
-    const reset={status:'Pending',operator_id:null,operator_name:null,assigned_to:null,updated_at:now}
+    // Reset ALL 4 categories to Pending, clear operator and completed_at
+    const reset = {
+      status: 'Pending', operator_id: null, operator_name: null,
+      assigned_to: null, updated_by: null, completed_at: null, updated_at: now
+    }
     if (mode==='all') {
-      let q = supabase.from('player_tasks').update(reset).in('category',ALL4)
-        .in('status',['In Progress','Pending'])
-      if (!isAdmin) q = q.eq('operator_id',profile.id)
+      let q = supabase.from('player_tasks').update(reset).in('category', ALL4)
+      if (!isAdmin) q = q.eq('operator_id', profile.id)
       await q
-      setMsg('↩️ All moved back to Available')
+      setMsg('↩️ All moved back to Available — all statuses reset to Pending')
     } else {
       const ids = Array.from(selected)
       if (!ids.length) { setClaiming(false); return }
-      let q = supabase.from('player_tasks').update(reset).in('player_id',ids).in('category',ALL4)
-      if (!isAdmin) q = q.eq('operator_id',profile.id)
-      await q
-      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back to Available`)
+      // Reset all 4 categories for selected players
+      await supabase.from('player_tasks').update(reset)
+        .in('player_id', ids).in('category', ALL4)
+      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses reset to Pending`)
     }
     setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
   }
@@ -326,12 +331,15 @@ export default function PlayersList({ profile }: Props) {
   async function moveToAvail() {
     const ids = Array.from(selected); if (!ids.length) return
     const now = new Date().toISOString()
+    // Reset ALL 4 categories for these players
     await supabase.from('player_tasks')
-      .update({status:'Pending',operator_id:null,operator_name:null,assigned_to:null,completed_at:null,updated_at:now})
-      .in('player_id',ids).in('category',ALL4)
+      .update({ status:'Pending', operator_id:null, operator_name:null,
+        assigned_to:null, updated_by:null, completed_at:null, updated_at:now })
+      .in('player_id', ids).in('category', ALL4)
     setPlayers(prev=>prev.filter(p=>!new Set(ids).has(p.player_id)))
     setTotal(prev=>Math.max(0,prev-ids.length))
-    setSelected(new Set()); setMsg(`↩️ ${ids.length} moved back to Available`)
+    setSelected(new Set())
+    setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses reset to Pending`)
   }
 
   // ── Save URL ───────────────────────────────────────────────────────────────
@@ -427,7 +435,7 @@ export default function PlayersList({ profile }: Props) {
       {/* Filters */}
       <div style={{background:tk.bgCard,border:`1px solid ${tk.border}`,borderRadius:'12px',padding:'12px 16px'}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center'}}>
-          <input type="text" placeholder="🔍 Search player name…" value={search}
+          <input type="text" placeholder="🔍 Search by Player ID or Name…" value={search}
             onChange={e=>setSearch(e.target.value)} style={{...inp,flex:1,minWidth:'180px'}}/>
 
           <select value={filterTour} onChange={e=>setFilterTour(e.target.value)} style={{...inp,minWidth:'200px'}}>
