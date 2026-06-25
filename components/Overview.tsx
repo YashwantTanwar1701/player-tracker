@@ -138,27 +138,39 @@ export default function Overview({ profile }: Props) {
       { data: opsAll },
       { data: statusData },
       { data: assignedTours },
+      { data: uniqueOps },
     ] = await Promise.all([
-      supabase.from('player_kpis').select('*').single(),               // player-level KPIs
-      supabase.from('players').select('*',{count:'exact',head:true}),  // total players in DB
+      supabase.from('player_kpis').select('*').single(),
+      supabase.from('players').select('*',{count:'exact',head:true}),
       supabase.from('team_progress_summary').select('*'),
       supabase.from('task_audit_log').select('*').gte('changed_at', from).lte('changed_at', to).limit(5000),
       supabase.from('operator_leaderboard').select('*'),
-      supabase.from('overall_status_breakdown').select('*'),           // {category, status, count}
+      supabase.from('overall_status_breakdown').select('*'),
       supabase.from('tournament_assignments').select('tournament_name,assigned_team').not('assigned_team','is',null),
+      supabase.from('operator_leaderboard').select('operator_id,operator_name').not('operator_id','is',null),
     ])
+
+    // ── Assigned player count (players in assigned tournaments) ───────────
+    const assignedTourNames0 = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
+    let assignedJobCount = 0
+    if (assignedTourNames0.length > 0) {
+      const { count: apc } = await supabase.from('players')
+        .select('*',{count:'exact',head:true})
+        .in('player_last_match_tournament_name', assignedTourNames0)
+      assignedJobCount = apc || 0
+    }
+
+    const uniqueOpCount = (uniqueOps||[]).length
 
     // ── KPI cards — from player_kpis view (1 player = 1 job) ─────────────
     const kpi = (kpiData || {}) as any
     setKpis({
-      total:         kpi.total_players      || 0,
+      total:         assignedJobCount,           // Assigned Jobs
       done:          kpi.completed_players  || 0,
       inProgress:    kpi.inprogress_players || 0,
       blocked:       kpi.blocked_players    || 0,
       players:       totalPlayersCount      || 0,
-      alreadyUpdated: (statusData||[])
-        .filter((r:any) => r.status === 'Already Updated')
-        .reduce((s:number, r:any) => s + (r.count||0), 0),
+      alreadyUpdated: uniqueOpCount,             // repurposed: unique operator count
     })
 
     setSummary(sumData||[])
@@ -420,13 +432,13 @@ export default function Overview({ profile }: Props) {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))', gap:'10px' }}>
             {[
-              { label:'Total Players',   value:fmt(kpis.players),       icon:'👤', color:'#f97316' },
-              { label:'Jobs Total',      value:fmt(kpis.total),         icon:'📋', color:tk.text   },
-              { label:'Completed Jobs',  value:fmt(kpis.done),          icon:'✅', color:'#16a34a' },
-              { label:'Already Updated', value:fmt(kpis.alreadyUpdated),icon:'✔',  color:'#0d9488' },
-              { label:'In Progress',     value:fmt(kpis.inProgress),    icon:'🔄', color:'#2563eb' },
-              { label:'Blocked',         value:fmt(kpis.blocked),       icon:'🚫', color:'#dc2626' },
-              { label:'Completion %',    value:pctStr,               icon:'📈', color:'#f97316' },
+              { label:'Total Players',    value:fmt(kpis.players),       icon:'👤', color:'#f97316' },
+              { label:'Assigned Jobs',    value:fmt(kpis.total),         icon:'📋', color:tk.text   },
+              { label:'Completed Jobs',   value:fmt(kpis.done),          icon:'✅', color:'#16a34a' },
+              { label:'Active Operators', value:fmt(kpis.alreadyUpdated),icon:'👥', color:'#0d9488' },
+              { label:'In Progress',      value:fmt(kpis.inProgress),    icon:'🔄', color:'#2563eb' },
+              { label:'Blocked',          value:fmt(kpis.blocked),       icon:'🚫', color:'#dc2626' },
+              { label:'Completion %',     value:pctStr,                  icon:'📈', color:'#f97316' },
             ].map(k=>(
               <div key={k.label} style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'14px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
