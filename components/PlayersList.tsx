@@ -260,15 +260,39 @@ export default function PlayersList({ profile }: Props) {
         changed_by_team: profile.team, old_status: existing?.status||null,
         new_status: modalStatus, source_urls: data.source_urls||[],
       })
-      setTasks(prev => ({ ...prev, [`${player.player_id}__${cat}`]: data as PlayerTask }))
-      // Move out of claimed only when ALL 4 categories are done
+
+      // Build newTasks using current tasks state + this save
+      // Must use functional updater so we get the latest tasks snapshot
+      let shouldRemove = false
+      setTasks(prev => {
+        const updated = { ...prev, [`${player.player_id}__${cat}`]: data as PlayerTask }
+        if (subTab === 'claimed') {
+          // Check ALL 4 categories using the latest snapshot
+          shouldRemove = ALL4.every(c => {
+            const t = updated[`${player.player_id}__${c}`]
+            return t && DONE.includes(t.status)
+          })
+        }
+        return updated
+      })
+
+      // Re-fetch all 4 tasks from DB to guarantee accuracy, then decide
       if (subTab === 'claimed') {
-        const newTasks = { ...tasks, [`${player.player_id}__${cat}`]: data as PlayerTask }
-        const allDone = ALL4.every(c => {
-          const t = newTasks[`${player.player_id}__${c}`]
-          return t && DONE.includes(t.status)
-        })
-        if (allDone) setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
+        const { data: freshTasks } = await supabase
+          .from('player_tasks').select('*')
+          .eq('player_id', player.player_id)
+        if (freshTasks) {
+          const freshMap: Record<string,PlayerTask> = {}
+          freshTasks.forEach((t:any) => { freshMap[`${t.player_id}__${t.category}`] = t })
+          setTasks(prev => ({ ...prev, ...freshMap }))
+          const allDone = ALL4.every(c => {
+            const t = freshMap[`${player.player_id}__${c}`]
+            return t && DONE.includes(t.status)
+          })
+          if (allDone) {
+            setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
+          }
+        }
       }
     }
     setSavingModal(false); setOpenModal(null)
