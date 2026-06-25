@@ -106,10 +106,11 @@ export default function Overview({ profile }: Props) {
   const [opFilter,    setOpFilter]    = useState('all')
 
   // All-time data (for Overall tab)
-  const [kpis,        setKpis]        = useState({ total:0, done:0, inProgress:0, blocked:0, players:0, alreadyUpdated:0 })
+  const [kpis,        setKpis]        = useState({ total:0, done:0, inProgress:0, blocked:0, players:0, alreadyUpdated:0, overallTotal:0 })
   const [catBreak,    setCatBreak]    = useState<any[]>([])
   const [teamBreak,   setTeamBreak]   = useState<any[]>([])
-  const [statusBreak, setStatusBreak] = useState<any[]>([])
+  const [statusBreak,         setStatusBreak]         = useState<any[]>([])
+  const [assignedStatusBreak, setAssignedStatusBreak] = useState<any[]>([])
 
   // Range-filtered data (for Time + Team tabs)
   const [auditRaw,    setAuditRaw]    = useState<any[]>([])
@@ -150,7 +151,7 @@ export default function Overview({ profile }: Props) {
       supabase.from('operator_leaderboard').select('operator_id,operator_name').not('operator_id','is',null),
     ])
 
-    // ── Assigned player count (players in assigned tournaments) ───────────
+    // ── Assigned player count (players in assigned active tournaments) ─────
     const assignedTourNames0 = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
     let assignedJobCount = 0
     if (assignedTourNames0.length > 0) {
@@ -160,7 +161,45 @@ export default function Overview({ profile }: Props) {
       assignedJobCount = apc || 0
     }
 
-    const uniqueOpCount = (uniqueOps||[]).length
+    // ── Status breakdown scoped to assigned tournaments ─────────────────────
+    if (assignedTourNames0.length > 0) {
+      const { data: assignedPIds } = await supabase
+        .from('players').select('player_id')
+        .in('player_last_match_tournament_name', assignedTourNames0)
+      const assignedIdList = (assignedPIds||[]).map((p:any) => p.player_id)
+
+      if (assignedIdList.length > 0) {
+        // Fetch tasks for assigned players only — chunked to avoid URL limits
+        const CHUNK = 500
+        const statusAgg: Record<string, Record<string, number>> = {}
+        for (let i = 0; i < assignedIdList.length; i += CHUNK) {
+          const chunk = assignedIdList.slice(i, i + CHUNK)
+          const { data: chunkTasks } = await supabase
+            .from('player_tasks')
+            .select('category, status')
+            .in('player_id', chunk)
+          ;(chunkTasks || []).forEach((t: any) => {
+            if (!statusAgg[t.category]) statusAgg[t.category] = {}
+            statusAgg[t.category][t.status] = (statusAgg[t.category][t.status] || 0) + 1
+          })
+        }
+        const assignedRows: any[] = []
+        Object.entries(statusAgg).forEach(([cat, statuses]) => {
+          Object.entries(statuses).forEach(([status, count]) => {
+            assignedRows.push({ category: cat, status, count })
+          })
+        })
+        setAssignedStatusBreak(assignedRows)
+      }
+    }
+
+    // ── Active operators = unique operators with In Progress tasks right now ──
+    const { data: activeOpData } = await supabase
+      .from('player_tasks')
+      .select('operator_id, operator_name')
+      .eq('status', 'In Progress')
+      .not('operator_id', 'is', null)
+    const activeOpCount = new Set((activeOpData||[]).map((t:any)=>t.operator_id)).size
 
     // ── KPI cards — from player_kpis view (1 player = 1 job) ─────────────
     const kpi = (kpiData || {}) as any
@@ -170,7 +209,8 @@ export default function Overview({ profile }: Props) {
       inProgress:    kpi.inprogress_players || 0,
       blocked:       kpi.blocked_players    || 0,
       players:       totalPlayersCount      || 0,
-      alreadyUpdated: uniqueOpCount,             // repurposed: unique operator count
+      alreadyUpdated: activeOpCount,             // Active Operators (claimed right now)
+      overallTotal:  kpi.total_players      || 0, // for Overall Completion bar
     })
 
     setSummary(sumData||[])
@@ -323,8 +363,15 @@ export default function Overview({ profile }: Props) {
 
   useEffect(() => { load() }, [load])
 
+  // Completion % = Assigned Jobs progress (Completed / Assigned)
   const pct    = kpis.total > 0 ? (kpis.done/kpis.total*100) : 0
   const pctStr = kpis.total > 0 ? pct.toFixed(1) + '%' : '0%'
+
+  // Overall Completion = all players with tasks (from player_kpis view, excludes inactive)
+  // kpis.players = total players in DB; use player_kpis total_players for overall
+  const overallTotal = kpis.overallTotal || 0
+  const overallPct   = overallTotal > 0 ? (kpis.done/overallTotal*100) : 0
+  const overallPctStr = overallTotal > 0 ? overallPct.toFixed(1) + '%' : '0%'
 
   const inp: React.CSSProperties = {
     background: tk.bgInput, border:`1px solid ${tk.border}`, borderRadius:'8px',
@@ -354,10 +401,12 @@ export default function Overview({ profile }: Props) {
   const filteredRangeOps = opFilter === 'all' ? rangeOps : rangeOps.filter(op => op.name === opFilter)
   const filteredAudit    = opFilter === 'all' ? auditRaw : auditRaw.filter((r:any) => r.changed_by_name === opFilter)
 
-  const picBreak  = statusBreak.filter((r:any)=>r.category==='Profile Pic Update')
-  const coreBreak = statusBreak.filter((r:any)=>r.category!=='Profile Pic Update')
-  const pieData   = Object.entries(
-    statusBreak.reduce((acc:any,r:any)=>{ acc[r.status]=(acc[r.status]||0)+(r.count||0); return acc }, {})
+  // Use assigned-scoped data for pie + breakdown cards; fall back to overall if not loaded
+  const scopedBreak = assignedStatusBreak.length > 0 ? assignedStatusBreak : statusBreak
+  const picBreak    = scopedBreak.filter((r:any)=>r.category==='Profile Pic Update')
+  const coreBreak   = scopedBreak.filter((r:any)=>r.category!=='Profile Pic Update')
+  const pieData     = Object.entries(
+    scopedBreak.reduce((acc:any,r:any)=>{ acc[r.status]=(acc[r.status]||0)+(r.count||0); return acc }, {})
   ).map(([name,value])=>({ name, value })).sort((a:any,b:any)=>b.value-a.value)
 
   const rangeLabel = RANGE_OPTIONS.find(o=>o.value===range)?.label || range
@@ -451,15 +500,18 @@ export default function Overview({ profile }: Props) {
           </div>
 
           {card(<>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'8px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
               <span style={{ color:tk.text, fontWeight:600, fontSize:'13px' }}>Overall Completion</span>
-              <span style={{ color:'#f97316', fontWeight:700, fontSize:'18px' }}>{pctStr}</span>
+              <span style={{ color:'#f97316', fontWeight:700, fontSize:'18px' }}>{overallPctStr}</span>
             </div>
+            <p style={{ color:tk.textFaint, fontSize:'11px', margin:'0 0 8px' }}>
+              All active tournament players regardless of team assignment
+            </p>
             <div style={{ height:'10px', background:tk.bgInput, borderRadius:'99px', overflow:'hidden' }}>
-              <div style={{ height:'100%', width:`${pct.toFixed(1)}%`, background:'linear-gradient(90deg,#f97316,#fb923c)', borderRadius:'99px', transition:'width 0.5s' }}/>
+              <div style={{ height:'100%', width:`${overallPct.toFixed(1)}%`, background:'linear-gradient(90deg,#16a34a,#22c55e)', borderRadius:'99px', transition:'width 0.5s' }}/>
             </div>
             <p style={{ color:tk.textDim, fontSize:'12px', margin:'6px 0 0' }}>
-              {fmt(kpis.done)} of {fmt(kpis.total)} players resolved · {fmt(kpis.total-kpis.done)} remaining
+              {fmt(kpis.done)} of {fmt(overallTotal)} players completed · {fmt(overallTotal - kpis.done)} remaining
             </p>
           </>)}
 
@@ -471,7 +523,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="name" tick={{fill:tk.textMuted,fontSize:11}}/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
                   <Legend wrapperStyle={{fontSize:12,color:tk.textMuted}}/>
                   <Bar dataKey="Done"        fill="#16a34a" radius={[4,4,0,0]}/>
                   <Bar dataKey="In Progress" fill="#2563eb" radius={[4,4,0,0]}/>
@@ -487,7 +539,7 @@ export default function Overview({ profile }: Props) {
                     <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={75} innerRadius={35}>
                       {pieData.map((_:any,i:number)=><Cell key={i} fill={PIE_COLORS[i%PIE_COLORS.length]}/>)}
                     </Pie>
-                    <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}/>
+                    <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
                   </PieChart>
                 </ResponsiveContainer>
                 <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
@@ -561,7 +613,7 @@ export default function Overview({ profile }: Props) {
                 </tr></thead>
                 <tbody>
                   {CATEGORIES.map(cat=>{
-                    const rows = statusBreak.filter((r:any)=>r.category===cat)
+                    const rows = scopedBreak.filter((r:any)=>r.category===cat)
                     const get  = (s:string)=>rows.find((r:any)=>r.status===s)?.count||0
                     const tot  = rows.reduce((s:number,r:any)=>s+(r.count||0),0)
                     return (
@@ -774,7 +826,7 @@ export default function Overview({ profile }: Props) {
                 <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                 <XAxis dataKey="name" tick={{fill:tk.textMuted,fontSize:11}}/>
                 <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}/>
+                <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
                 <Legend wrapperStyle={{fontSize:12}}/>
                 <Bar dataKey="Cairo" fill="#f97316" radius={[4,4,0,0]}/>
                 <Bar dataKey="India" fill="#3b82f6" radius={[4,4,0,0]}/>
@@ -822,7 +874,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
                   <Area type="monotone" dataKey="updates" stroke="#f97316" strokeWidth={2} fill="url(#ag)" name="Updates"/>
                 </AreaChart>
               </ResponsiveContainer>
@@ -839,7 +891,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="hour" tick={{fill:tk.textMuted,fontSize:10}} interval={1}/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}
                     formatter={(v:any)=>[v,'Updates']} labelFormatter={l=>`Hour: ${l}`}/>
                   <Bar dataKey="updates" radius={[4,4,0,0]}>
                     {hourData.map((entry:any,i:number)=>{
@@ -866,7 +918,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#1a1d27',border:'1px solid #374151',borderRadius:'8px',color:'#f1f5f9'}}/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
                   <Line type="monotone" dataKey="updates" stroke="#a78bfa" strokeWidth={2} dot={false} name="Updates"/>
                 </LineChart>
               </ResponsiveContainer>
