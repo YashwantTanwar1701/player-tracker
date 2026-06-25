@@ -135,14 +135,18 @@ export default function Overview({ profile }: Props) {
       { data: sumData },
       { data: audit },
       { data: opsAll },
-      { data: sbData },
+      { data: statusData },   // overall_status_breakdown: {category, status, count}
+      { data: catData },      // category_player_breakdown: {category, pending, in_progress, done, total}
+      { data: assignedTours }, // tournaments with assigned teams for pending count
     ] = await Promise.all([
       supabase.from('player_kpis').select('*').single(),
       supabase.from('players').select('*',{count:'exact',head:true}),
       supabase.from('team_progress_summary').select('*'),
       supabase.from('task_audit_log').select('*').gte('changed_at', from).lte('changed_at', to).limit(5000),
       supabase.from('operator_leaderboard').select('*'),
-      supabase.from('category_player_breakdown').select('*'),
+      supabase.from('overall_status_breakdown').select('*'),   // for pie + breakdown cards + category×status table
+      supabase.from('category_player_breakdown').select('*'),  // for bar chart
+      supabase.from('tournament_assignments').select('tournament_name,assigned_team').not('assigned_team','is',null),
     ])
 
     const kpi = playerKpi as any
@@ -152,18 +156,44 @@ export default function Overview({ profile }: Props) {
       inProgress:    kpi?.inprogress_players || 0,
       blocked:       kpi?.blocked_players    || 0,
       players:       totalPlayersCount       || 0,
-      alreadyUpdated: 0, // now rolled into done
+      alreadyUpdated: 0,
     })
     setSummary(sumData||[])
     setAllOps(opsAll||[])
-    setStatusBreak(sbData||[])
+    setStatusBreak(statusData||[])   // {category, status, count}
     setAuditRaw(audit||[])
 
-    // Category breakdown — 1 player = 1 count per category
-    setCatBreak((sbData||[]).map((r:any) => ({
-      name: r.category.replace(' Update','').replace('Height & Weight','Ht/Wt'),
-      Done: r.done||0, 'In Progress': r.in_progress||0, Pending: r.pending||0
-    })))
+    // Bar chart: category × status, Pending = only players in ASSIGNED tournaments
+    // Get player count per category for assigned tournaments
+    const assignedTourNames = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
+    if (assignedTourNames.length > 0) {
+      // Fetch pending counts scoped to assigned tournaments
+      const { data: assignedPlayers } = await supabase
+        .from('players').select('player_id')
+        .in('player_last_match_tournament_name', assignedTourNames)
+      const assignedIds = (assignedPlayers||[]).map((p:any)=>p.player_id)
+      const assignedCount = assignedIds.length
+
+      // Use catData but override Pending with tournament-scoped pending
+      setCatBreak((catData||[]).map((r:any) => {
+        // Pending in bar = players in assigned tournaments minus done/inprogress for that category
+        const catStatusRow = (statusData||[]).filter((s:any)=>s.category===r.category)
+        const doneCount   = catStatusRow.filter((s:any)=>!['Pending','In Progress'].includes(s.status)).reduce((acc:number,s:any)=>acc+(s.count||0),0)
+        const inProgCount = catStatusRow.find((s:any)=>s.status==='In Progress')?.count||0
+        const pendingInTour = Math.max(0, assignedCount - doneCount - inProgCount)
+        return {
+          name: r.category.replace(' Update','').replace('Height & Weight','Ht/Wt'),
+          Done: r.done||0,
+          'In Progress': r.in_progress||0,
+          Pending: pendingInTour,
+        }
+      }))
+    } else {
+      setCatBreak((catData||[]).map((r:any) => ({
+        name: r.category.replace(' Update','').replace('Height & Weight','Ht/Wt'),
+        Done: r.done||0, 'In Progress': r.in_progress||0, Pending: r.pending||0,
+      })))
+    }
 
     // Team breakdown (all-time)
     const teamMap: Record<string,{done:number;total:number}> = {}
