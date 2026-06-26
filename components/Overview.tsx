@@ -193,13 +193,22 @@ export default function Overview({ profile }: Props) {
       }
     }
 
-    // ── Active operators = unique operators with In Progress tasks right now ──
+    // ── Active operators = operators with genuinely claimed jobs right now
+    // A job is claimed if: operator_id IS NOT NULL (not reset)
+    // We count DISTINCT operators who appear in this state
     const { data: activeOpData } = await supabase
       .from('player_tasks')
-      .select('operator_id, operator_name')
-      .eq('status', 'In Progress')
+      .select('operator_id, player_id')
       .not('operator_id', 'is', null)
-    const activeOpCount = new Set((activeOpData||[]).map((t:any)=>t.operator_id)).size
+      .in('status', ['In Progress'])
+    // Group by operator — only count operator if they have at least 1 player
+    // where ALL their tasks are claimed by them (not a stale partial claim)
+    const opPlayerMap: Record<string, Set<number>> = {}
+    ;(activeOpData||[]).forEach((t:any) => {
+      if (!opPlayerMap[t.operator_id]) opPlayerMap[t.operator_id] = new Set()
+      opPlayerMap[t.operator_id].add(t.player_id)
+    })
+    const activeOpCount = Object.keys(opPlayerMap).length
 
     // ── KPI cards — from player_kpis view (1 player = 1 job) ─────────────
     const kpi = (kpiData || {}) as any
