@@ -224,50 +224,35 @@ export default function Overview({ profile }: Props) {
       pct: v.total>0?Math.round(v.done/v.total*100):0
     })))
 
-    // ── Build operator stats from RPC auditData (no row limit) ───────────
-    // auditData rows: {activity_date, hour_of_day, operator_name, team, category, new_status, task_count}
-    // This is pre-aggregated server-side — no individual row processing needed
-    type OpEntry = {
-      name:string; team:string; total:number
-      playerUpdated:number; playerAlreadyUpdated:number
-      playerNotFound:number; playerNotOnline:number
-      playerBlocked:number; playerInProgress:number; players:number
-      picUpdated:number; picAlreadyUpdated:number
-      picNotFound:number; picNotOnline:number
-      picBlocked:number; picInProgress:number; pics:number
-    }
-    const opMap: Record<string, OpEntry> = {}
-    ;(auditData||[]).forEach((r:any) => {
-      const k = r.operator_name; if (!k) return
-      const cnt = Number(r.task_count) || 0
-      if (!opMap[k]) opMap[k] = {
-        name:r.operator_name, team:r.team||'', total:0,
-        playerUpdated:0,playerAlreadyUpdated:0,playerNotFound:0,
-        playerNotOnline:0,playerBlocked:0,playerInProgress:0,players:0,
-        picUpdated:0,picAlreadyUpdated:0,picNotFound:0,
-        picNotOnline:0,picBlocked:0,picInProgress:0,pics:0,
-      }
-      opMap[k].total += cnt
-      const isPic = r.category === 'Profile Pic Update'
-      if (isPic) {
-        opMap[k].pics += cnt
-        if (r.new_status==='Yes')                        opMap[k].picUpdated         += cnt
-        else if (r.new_status==='Already Updated')       opMap[k].picAlreadyUpdated  += cnt
-        else if (r.new_status==='Not Found On Any Source') opMap[k].picNotFound       += cnt
-        else if (r.new_status==='Player Not Found Online') opMap[k].picNotOnline      += cnt
-        else if (r.new_status==='Blocked')               opMap[k].picBlocked         += cnt
-        else if (r.new_status==='In Progress')           opMap[k].picInProgress      += cnt
-      } else {
-        opMap[k].players += cnt
-        if (r.new_status==='Yes')                        opMap[k].playerUpdated      += cnt
-        else if (r.new_status==='Already Updated')       opMap[k].playerAlreadyUpdated += cnt
-        else if (r.new_status==='Not Found On Any Source') opMap[k].playerNotFound   += cnt
-        else if (r.new_status==='Player Not Found Online') opMap[k].playerNotOnline  += cnt
-        else if (r.new_status==='Blocked')               opMap[k].playerBlocked      += cnt
-        else if (r.new_status==='In Progress')           opMap[k].playerInProgress   += cnt
-      }
+    // ── Operator activity via dedicated RPC — returns unique player counts ──
+    // get_operator_activity returns one row per operator with proper unique counts
+    const { data: opActivity } = await supabase.rpc('get_operator_activity', {
+      from_ts: from, to_ts: to
     })
-    setRangeOps(Object.values(opMap).sort((a,b)=>b.total-a.total))
+    // Map RPC result — unique_players for count column, separate player/pic stats
+    const opsInRange = (opActivity||[]).map((r:any) => ({
+      name:                r.operator_name,
+      team:                r.team || '',
+      total:               Number(r.total_actions)      || 0,
+      unique_players:      Number(r.unique_players)     || 0,  // unique player IDs touched
+      players:             Number(r.player_tasks_count) || 0,
+      pics:                Number(r.pic_tasks_count)    || 0,
+      // Player category statuses
+      playerUpdated:       Number(r.player_yes)         || 0,
+      playerAlreadyUpdated:Number(r.player_already)     || 0,
+      playerNotFound:      Number(r.player_not_found)   || 0,
+      playerNotOnline:     Number(r.player_not_online)  || 0,
+      playerBlocked:       Number(r.player_blocked)     || 0,
+      playerInProgress:    Number(r.player_in_progress) || 0,
+      // Pic category statuses
+      picUpdated:          Number(r.pic_yes)            || 0,
+      picAlreadyUpdated:   Number(r.pic_already)        || 0,
+      picNotFound:         Number(r.pic_not_found)      || 0,
+      picNotOnline:        Number(r.pic_not_online)     || 0,
+      picBlocked:          Number(r.pic_blocked)        || 0,
+      picInProgress:       Number(r.pic_in_progress)    || 0,
+    })).sort((a:any,b:any) => b.total - a.total)
+    setRangeOps(opsInRange)
 
     // ── Daily trend from auditData ────────────────────────────────────────
     const dayMap: Record<string,number> = {}
@@ -583,9 +568,9 @@ export default function Overview({ profile }: Props) {
             {[
               { label:'Actions in Range',   value:fmt(totalInRange),                                                                     icon:'⚡', color:'#f97316' },
               { label:'Active Operators',   value:fmt(uniqOpsInRange),                                                                   icon:'👥', color:'#60a5fa' },
-              { label:'Player Tasks',       value:fmt(filteredRangeOps.reduce((s,o)=>s+o.player,0)),                                     icon:'👤', color:'#34d399' },
-              { label:'Pic Tasks',          value:fmt(filteredRangeOps.reduce((s,o)=>s+o.pic,0)),                                        icon:'📸', color:'#a78bfa' },
-              { label:'Unique Players',     value:fmt(filteredRangeOps.reduce((s,o)=>s+o.unique_players,0)),                             icon:'🎯', color:'#fb923c' },
+              { label:'Player Tasks',       value:fmt(filteredRangeOps.reduce((s,o)=>s+(o.unique_players||0),0)),                                     icon:'👤', color:'#34d399' },
+              { label:'Pic Tasks',          value:fmt(filteredRangeOps.reduce((s,o)=>s+o.pics,0)),                                        icon:'📸', color:'#a78bfa' },
+              { label:'Unique Players',     value:fmt(filteredRangeOps.reduce((s,o)=>s+(o.unique_players||0),0)),                             icon:'🎯', color:'#fb923c' },
             ].map(k=>(
               <div key={k.label} style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'14px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
@@ -616,7 +601,7 @@ export default function Overview({ profile }: Props) {
           {/* Player Tasks table */}
           {card(<>
             {h3('👤 Player Tasks in Period', `Status breakdown per operator during "${rangeLabel}"`)}
-            {filteredRangeOps.filter((op:any)=>op.players>0).length === 0 ? (
+            {filteredRangeOps.filter((op:any)=>op.players>0||op.pics>0).length === 0 ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>
                 No player task activity in this period.
               </p>
@@ -629,14 +614,14 @@ export default function Overview({ profile }: Props) {
                     ))}
                   </tr></thead>
                   <tbody>
-                    {filteredRangeOps.filter((op:any)=>op.players>0).map((op:any,i:number)=>(
+                    {filteredRangeOps.filter((op:any)=>op.players>0||op.unique_players>0).map((op:any,i:number)=>(
                       <tr key={op.name}
                         onMouseEnter={e=>(e.currentTarget.style.background=tk.rowHover)}
                         onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
                         <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
                         <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
                         <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
-                        <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(op.players)}</td>
+                        <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(op.unique_players)}</td>
                         <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.playerUpdated)}</td>
                         <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.playerAlreadyUpdated)}</td>
                         <td style={{ ...tD, color:'#d97706' }}>{fmt(op.playerNotFound)}</td>
@@ -648,7 +633,7 @@ export default function Overview({ profile }: Props) {
                     {/* Totals row */}
                     <tr style={{ background: tk.tableHead, fontWeight:700 }}>
                       <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
-                      <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(filteredRangeOps.filter((o:any)=>o.players>0).reduce((s:number,o:any)=>s+o.players,0))}</td>
+                      <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+(o.unique_players||0),0))}</td>
                       <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerUpdated,0))}</td>
                       <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerAlreadyUpdated,0))}</td>
                       <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerNotFound,0))}</td>
@@ -685,7 +670,7 @@ export default function Overview({ profile }: Props) {
                         <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
                         <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
                         <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
-                        <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(op.pics)}</td>
+                        <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(op.unique_players)}</td>
                         <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.picUpdated)}</td>
                         <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.picAlreadyUpdated)}</td>
                         <td style={{ ...tD, color:'#d97706' }}>{fmt(op.picNotFound)}</td>
@@ -697,7 +682,7 @@ export default function Overview({ profile }: Props) {
                     {/* Totals row */}
                     <tr style={{ background: tk.tableHead, fontWeight:700 }}>
                       <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
-                      <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(filteredRangeOps.filter((o:any)=>o.pics>0).reduce((s:number,o:any)=>s+o.pics,0))}</td>
+                      <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+(o.unique_players||0),0))}</td>
                       <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picUpdated,0))}</td>
                       <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picAlreadyUpdated,0))}</td>
                       <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picNotFound,0))}</td>
