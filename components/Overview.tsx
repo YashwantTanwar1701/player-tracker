@@ -570,7 +570,6 @@ export default function Overview({ profile }: Props) {
               { label:'Active Operators',   value:fmt(uniqOpsInRange),                                                                   icon:'👥', color:'#60a5fa' },
               { label:'Player Tasks',       value:fmt(filteredRangeOps.reduce((s,o)=>s+(o.unique_players||0),0)),                                     icon:'👤', color:'#34d399' },
               { label:'Pic Tasks',          value:fmt(filteredRangeOps.reduce((s,o)=>s+o.pics,0)),                                        icon:'📸', color:'#a78bfa' },
-              { label:'Unique Players',     value:fmt(filteredRangeOps.reduce((s,o)=>s+(o.unique_players||0),0)),                             icon:'🎯', color:'#fb923c' },
             ].map(k=>(
               <div key={k.label} style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'14px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
@@ -601,7 +600,7 @@ export default function Overview({ profile }: Props) {
           {/* Player Tasks table */}
           {card(<>
             {h3('👤 Player Tasks in Period', `Status breakdown per operator during "${rangeLabel}"`)}
-            {filteredRangeOps.filter((op:any)=>op.players>0||op.pics>0).length === 0 ? (
+            {filteredRangeOps.length === 0 ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>
                 No player task activity in this period.
               </p>
@@ -609,19 +608,18 @@ export default function Overview({ profile }: Props) {
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse' }}>
                   <thead><tr>
-                    {['#','Operator','Team','Players Updated (Count)','Yes (Updated)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
+                    {['#','Operator','Team','Yes (Updated)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
                       <th key={h} style={tH}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
-                    {filteredRangeOps.filter((op:any)=>op.players>0||op.unique_players>0).map((op:any,i:number)=>(
+                    {filteredRangeOps.filter((op:any)=>op.total>0).map((op:any,i:number)=>(
                       <tr key={op.name}
                         onMouseEnter={e=>(e.currentTarget.style.background=tk.rowHover)}
                         onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
                         <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
                         <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
                         <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
-                        <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(op.unique_players)}</td>
                         <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.playerUpdated)}</td>
                         <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.playerAlreadyUpdated)}</td>
                         <td style={{ ...tD, color:'#d97706' }}>{fmt(op.playerNotFound)}</td>
@@ -633,7 +631,6 @@ export default function Overview({ profile }: Props) {
                     {/* Totals row */}
                     <tr style={{ background: tk.tableHead, fontWeight:700 }}>
                       <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
-                      <td style={{ ...tD, color:'#f97316', fontWeight:700 }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+(o.unique_players||0),0))}</td>
                       <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerUpdated,0))}</td>
                       <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerAlreadyUpdated,0))}</td>
                       <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.playerNotFound,0))}</td>
@@ -650,7 +647,7 @@ export default function Overview({ profile }: Props) {
           {/* Profile Pic Tasks table */}
           {card(<>
             {h3('📸 Profile Pic Tasks in Period', `Status breakdown per operator during "${rangeLabel}"`)}
-            {filteredRangeOps.filter((op:any)=>op.pics>0).length === 0 ? (
+            {filteredRangeOps.length === 0 ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>
                 No profile pic activity in this period.
               </p>
@@ -658,19 +655,18 @@ export default function Overview({ profile }: Props) {
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse' }}>
                   <thead><tr>
-                    {['#','Operator','Team','Players Updated (Count)','Yes (Uploaded)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
+                    {['#','Operator','Team','Yes (Uploaded)','Already Updated','Not Found On Any Source','Player Not Found Online','Blocked','In Progress'].map(h=>(
                       <th key={h} style={tH}>{h}</th>
                     ))}
                   </tr></thead>
                   <tbody>
-                    {filteredRangeOps.filter((op:any)=>op.pics>0).map((op:any,i:number)=>(
+                    {filteredRangeOps.filter((op:any)=>op.total>0).map((op:any,i:number)=>(
                       <tr key={op.name}
                         onMouseEnter={e=>(e.currentTarget.style.background=tk.rowHover)}
                         onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
                         <td style={{ ...tD, color:tk.textFaint, fontSize:'13px' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
                         <td style={{ ...tD, color:tk.text, fontWeight:600, whiteSpace:'nowrap' }}>{op.name}</td>
                         <td style={tD}><span style={{ color:TEAM_COLOR[op.team as 'Cairo'|'India'|'Admin']||tk.textMuted, fontSize:'12px', fontWeight:600 }}>{op.team||'—'}</span></td>
-                        <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(op.unique_players)}</td>
                         <td style={{ ...tD, color:'#16a34a', fontWeight:600 }}>{fmt(op.picUpdated)}</td>
                         <td style={{ ...tD, color:'#0d9488' }}>{fmt(op.picAlreadyUpdated)}</td>
                         <td style={{ ...tD, color:'#d97706' }}>{fmt(op.picNotFound)}</td>
@@ -682,7 +678,6 @@ export default function Overview({ profile }: Props) {
                     {/* Totals row */}
                     <tr style={{ background: tk.tableHead, fontWeight:700 }}>
                       <td style={tD} colSpan={3}><span style={{ color:tk.text }}>Total</span></td>
-                      <td style={{ ...tD, color:'#a78bfa', fontWeight:700 }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+(o.unique_players||0),0))}</td>
                       <td style={{ ...tD, color:'#16a34a' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picUpdated,0))}</td>
                       <td style={{ ...tD, color:'#0d9488' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picAlreadyUpdated,0))}</td>
                       <td style={{ ...tD, color:'#d97706' }}>{fmt(filteredRangeOps.reduce((s:number,o:any)=>s+o.picNotFound,0))}</td>
