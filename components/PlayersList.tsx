@@ -136,54 +136,59 @@ export default function PlayersList({ profile }: Props) {
   }
 
   // ── Claimed ────────────────────────────────────────────────────────────────
-  async function doClaimed(tourNames: string[]) {
+  async function doClaimed(_tourNames: string[]) {
+    // Fetch ALL claimed tasks — don't filter by tournament
+    // Operators must see their jobs regardless of which tournament tab is active
     let tq = supabase.from('player_tasks').select('player_id')
-      .in('category', CORE).not('operator_id','is',null)
-      .in('status', ['Pending','In Progress'])
-    if (!isAdmin)           tq = tq.eq('operator_id', profile.id)
+      .in('category', ALL4)
+      .not('operator_id', 'is', null)
+      .in('status', ['Pending', 'In Progress'])
+    if (!isAdmin)                tq = tq.eq('operator_id', profile.id)
     else if (filterOp !== 'all') tq = tq.eq('operator_name', filterOp)
 
     const { data: claimedT } = await tq
     if (!claimedT?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-    const claimedIds = Array.from(new Set(claimedT.map((t:any)=>t.player_id)))
+    const claimedIds = Array.from(new Set(claimedT.map((t:any) => t.player_id as number)))
 
     let q = supabase.from('players')
-      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name',{count:'exact'})
+      .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count: 'exact' })
       .in('player_id', claimedIds)
-      .in('player_last_match_tournament_name', tourNames)
-    if (search) { const pid = parseInt(search); if (!isNaN(pid)) q = q.eq('player_id', pid); else q = q.ilike('full_name', `%${search}%`) }
+    if (search) {
+      const pid = parseInt(search)
+      if (!isNaN(pid)) q = q.eq('player_id', pid)
+      else             q = q.ilike('full_name', `%${search}%`)
+    }
     const from = (page-1)*PAGE
-    const { data:pd, count } = await q
-      .order('player_last_match_tournament_name',{ascending:true,nullsFirst:false})
-      .order('last_team_name',{ascending:true,nullsFirst:false})
+    const { data: pd, count } = await q
+      .order('player_last_match_tournament_name', { ascending: true, nullsFirst: false })
+      .order('last_team_name',                     { ascending: true, nullsFirst: false })
       .range(from, from+PAGE-1)
     await loadTasks((pd||[]) as Player[], count||0)
   }
 
   // ── Completed ──────────────────────────────────────────────────────────────
   async function doCompleted(tourNames: string[]) {
-    // Cap at COMP_LIMIT rows for performance
-    const { data: doneTasks } = await supabase
-      .from('player_tasks').select('player_id, category, completed_at, updated_at')
-      .in('category', ALL4).not('status','in','(Pending,In Progress)')
-      .order('completed_at',{ascending:false,nullsFirst:false})
-      .limit(COMP_LIMIT * 3)  // fetch extra to account for deduplication
+    // Use completed_players view — already has all 3 core tasks done, ordered by completed_at DESC
+    // Then intersect with tournament filter
+    const { data: completedView } = await supabase
+      .from('completed_players')
+      .select('player_id, completed_at')
+      .in('tournament_name', tourNames)
+      .order('completed_at', { ascending: false, nullsFirst: false })
+      .limit(COMP_LIMIT)
 
-    if (!doneTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    if (!completedView?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    // Group: player must have all 4 categories done
-    const pMap: Record<number,{cats:Set<string>;ts:number}> = {}
-    doneTasks.forEach((t:any) => {
-      if (!pMap[t.player_id]) pMap[t.player_id]={cats:new Set(),ts:0}
-      pMap[t.player_id].cats.add(t.category)
-      const ts = new Date(t.completed_at||t.updated_at||0).getTime()
-      if (ts > pMap[t.player_id].ts) pMap[t.player_id].ts = ts
-    })
-    let sortedIds = Object.entries(pMap)
-      .filter(([,v]) => ALL4.every(c=>v.cats.has(c)))
-      .sort(([,a],[,b])=>b.ts-a.ts)
-      .map(([id])=>parseInt(id))
-      .slice(0, COMP_LIMIT)
+    let sortedIds = completedView.map((r:any) => r.player_id as number)
+
+    // Apply operator filter for admin
+    if (isAdmin && filterOp !== 'all') {
+      const { data: opTasks } = await supabase.from('player_tasks')
+        .select('player_id').in('category', CORE).eq('operator_name', filterOp)
+        .in('player_id', sortedIds.slice(0, 500))
+      const opIds = new Set((opTasks||[]).map((t:any)=>t.player_id))
+      sortedIds = sortedIds.filter(id => opIds.has(id))
+    }
 
     // Apply operator filter for admin
     if (isAdmin && filterOp !== 'all') {
@@ -288,19 +293,13 @@ export default function PlayersList({ profile }: Props) {
           setTasks(prev => ({ ...prev, ...freshMap }))
 
           // ALL 4 must be in a DONE status (not Pending, not In Progress)
+          // Player moves to Completed only when ALL 4 categories are resolved
           const allDone = ALL4.every(c => {
             const t = freshMap[`${player.player_id}__${c}`]
-            // Must exist AND be a resolved status
             return t && DONE.includes(t.status)
           })
 
-          // Double-check: none should be Pending or In Progress
-          const anyIncomplete = ALL4.some(c => {
-            const t = freshMap[`${player.player_id}__${c}`]
-            return !t || ['Pending','In Progress'].includes(t.status)
-          })
-
-          if (allDone && !anyIncomplete) {
+          if (allDone) {
             setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
           }
         }
@@ -347,33 +346,16 @@ export default function PlayersList({ profile }: Props) {
       assigned_to: null, updated_by: null, completed_at: null, updated_at: now
     }
     if (mode==='all') {
-      // Get task IDs to delete audit log entries
-      const { data: taskIds } = await supabase.from('player_tasks')
-        .select('id, player_id').in('category', ALL4)
-        .filter(isAdmin ? 'status' : 'operator_id',
-          isAdmin ? 'in' : 'eq',
-          isAdmin ? '("Pending","In Progress")' : profile.id)
-      const ids2 = (taskIds||[]).map((t:any) => t.id)
-      if (ids2.length) {
-        await supabase.from('task_audit_log').delete().in('task_id', ids2)
-      }
       let q = supabase.from('player_tasks').update(reset).in('category', ALL4)
       if (!isAdmin) q = q.eq('operator_id', profile.id)
       await q
-      setMsg('↩️ All moved back to Available — all statuses and logs reset')
+      setMsg('↩️ All moved back to Available — all statuses reset to Pending')
     } else {
       const ids = Array.from(selected)
       if (!ids.length) { setClaiming(false); return }
-      // Delete audit log for these players first
-      const { data: taskIds } = await supabase.from('player_tasks')
-        .select('id').in('player_id', ids).in('category', ALL4)
-      const tids = (taskIds||[]).map((t:any) => t.id)
-      if (tids.length) {
-        await supabase.from('task_audit_log').delete().in('task_id', tids)
-      }
       await supabase.from('player_tasks').update(reset)
         .in('player_id', ids).in('category', ALL4)
-      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses and logs reset`)
+      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back to Available`)
     }
     setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
   }
@@ -381,13 +363,6 @@ export default function PlayersList({ profile }: Props) {
   async function moveToAvail() {
     const ids = Array.from(selected); if (!ids.length) return
     const now = new Date().toISOString()
-    // Delete audit log for these players first
-    const { data: taskIds } = await supabase.from('player_tasks')
-      .select('id').in('player_id', ids).in('category', ALL4)
-    const tids = (taskIds||[]).map((t:any) => t.id)
-    if (tids.length) {
-      await supabase.from('task_audit_log').delete().in('task_id', tids)
-    }
     // Reset ALL 4 categories
     await supabase.from('player_tasks')
       .update({ status:'Pending', operator_id:null, operator_name:null,
