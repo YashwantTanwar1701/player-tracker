@@ -162,14 +162,24 @@ export default function Overview({ profile }: Props) {
     }
 
     // ── Status breakdown scoped to assigned tournaments ─────────────────────
+    // Fetch ALL assigned player IDs in pages (Supabase default cap = 1000 per request)
     if (assignedTourNames0.length > 0) {
-      const { data: assignedPIds } = await supabase
-        .from('players').select('player_id')
-        .in('player_last_match_tournament_name', assignedTourNames0)
-      const assignedIdList = (assignedPIds||[]).map((p:any) => p.player_id)
+      const PAGE_SIZE = 1000
+      let assignedIdList: number[] = []
+      let page = 0
+      while (true) {
+        const { data: batch } = await supabase
+          .from('players').select('player_id')
+          .in('player_last_match_tournament_name', assignedTourNames0)
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+        if (!batch || batch.length === 0) break
+        assignedIdList = assignedIdList.concat(batch.map((p:any) => p.player_id))
+        if (batch.length < PAGE_SIZE) break  // last page
+        page++
+      }
 
       if (assignedIdList.length > 0) {
-        // Fetch tasks for assigned players only — chunked to avoid URL limits
+        // Fetch tasks for ALL assigned players — chunked to avoid URL length limits
         const CHUNK = 500
         const statusAgg: Record<string, Record<string, number>> = {}
         for (let i = 0; i < assignedIdList.length; i += CHUNK) {
