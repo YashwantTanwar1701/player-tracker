@@ -254,11 +254,13 @@ export default function Overview({ profile }: Props) {
     })).sort((a:any,b:any) => b.total - a.total)
     setRangeOps(opsInRange)
 
-    // ── Daily trend from auditData ────────────────────────────────────────
+    // ── Daily trend — unique players updated per day ────────────────────
     const dayMap: Record<string,number> = {}
     ;(auditData||[]).forEach((r:any) => {
       const d = r.activity_date?.slice(0,10)
-      if (d) dayMap[d] = (dayMap[d]||0) + (Number(r.task_count)||0)
+      // Sum player_count (unique players per operator per day) across operators
+      // Note: same player may be counted by multiple operators — acceptable approximation
+      if (d) dayMap[d] = (dayMap[d]||0) + (Number(r.player_count)||0)
     })
     const days: any[] = []
     const cur = new Date(from0); cur.setHours(0,0,0,0)
@@ -270,12 +272,12 @@ export default function Overview({ profile }: Props) {
     }
     setDailyData(days)
 
-    // ── Hour of day from auditData ────────────────────────────────────────
+    // ── Hour of day — unique players updated per hour ───────────────────
     const hMap: Record<number,number> = {}
     for(let h=0;h<24;h++) hMap[h]=0
     ;(auditData||[]).forEach((r:any) => {
       const h = Number(r.hour_of_day)
-      if (!isNaN(h)) hMap[h] = (hMap[h]||0) + (Number(r.task_count)||0)
+      if (!isNaN(h)) hMap[h] = (hMap[h]||0) + (Number(r.player_count)||0)
     })
     setHourData(Object.entries(hMap).map(([h,v])=>({ hour:`${String(h).padStart(2,'0')}:00`, updates:v as number })))
 
@@ -777,7 +779,7 @@ export default function Overview({ profile }: Props) {
           </div>
 
           {!isSubDay && card(<>
-            {h3(`Daily Activity — ${rangeLabel}`)}
+            {h3(`Players Updated Daily — ${rangeLabel}`)}
             {dailyData.every((d:any)=>d.updates===0) ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>No activity in this period</p>
             ) : (
@@ -793,14 +795,14 @@ export default function Overview({ profile }: Props) {
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
                   <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
-                  <Area type="monotone" dataKey="updates" stroke="#f97316" strokeWidth={2} fill="url(#ag)" name="Task Updates"/>
+                  <Area type="monotone" dataKey="updates" stroke="#f97316" strokeWidth={2} fill="url(#ag)" name="Players Updated"/>
                 </AreaChart>
               </ResponsiveContainer>
             )}
           </>)}
 
           {card(<>
-            {h3('Activity by Hour of Day (IST)')}
+            {h3('Players Updated by Hour (IST)')}
             {hourData.every((d:any)=>d.updates===0) ? (
               <p style={{ color:tk.textFaint, textAlign:'center', padding:'32px 0' }}>No activity in this period</p>
             ) : (
@@ -813,7 +815,7 @@ export default function Overview({ profile }: Props) {
                     contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}
                     itemStyle={{color:'#f9fafb'}}
                     labelStyle={{color:'#f9fafb',fontWeight:600}}
-                    formatter={(v:any)=>[v,'Task Updates']}
+                    formatter={(v:any)=>[v,'Players Updated']}
                     labelFormatter={(l:any)=>`Hour: ${l}`}/>
                   <Bar dataKey="updates" radius={[4,4,0,0]}>
                     {hourData.map((entry:any,i:number)=>{
@@ -834,14 +836,14 @@ export default function Overview({ profile }: Props) {
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={dailyData.map((d:any)=>{
                   const count = filteredAudit.filter((r:any)=>r.activity_date?.slice(5)===d.date)
-                    .reduce((s:number,r:any)=>s+(Number(r.task_count)||0),0)
+                    .reduce((s:number,r:any)=>s+(Number(r.player_count)||0),0)
                   return { ...d, updates: count }
                 })}>
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
                   <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
-                  <Line type="monotone" dataKey="updates" stroke="#a78bfa" strokeWidth={2} dot={false} name="Updates"/>
+                  <Line type="monotone" dataKey="updates" stroke="#a78bfa" strokeWidth={2} dot={false} name="Players Updated"/>
                 </LineChart>
               </ResponsiveContainer>
             </>)
