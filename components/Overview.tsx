@@ -332,7 +332,8 @@ export default function Overview({ profile }: Props) {
   ).map(([name,value])=>({ name, value })).sort((a:any,b:any)=>b.value-a.value)
 
   const rangeLabel = RANGE_OPTIONS.find(o=>o.value===range)?.label || range
-  const totalInRange = auditRaw.reduce((s:number,r:any)=>s+(Number(r.task_count)||0), 0)
+  // Total unique players updated in range = sum of unique_players across all operators
+  const totalInRange = rangeOps.reduce((s:number,r:any)=>s+(r.unique_players||0), 0)
   const uniqOpsInRange = new Set(auditRaw.map((r:any)=>r.operator_name).filter(Boolean)).size
 
   return (
@@ -445,7 +446,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="name" tick={{fill:tk.textMuted,fontSize:11}}/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
                   <Legend wrapperStyle={{fontSize:12,color:tk.textMuted}}/>
                   <Bar dataKey="Done"        fill="#16a34a" radius={[4,4,0,0]}/>
                   <Bar dataKey="In Progress" fill="#2563eb" radius={[4,4,0,0]}/>
@@ -461,7 +462,7 @@ export default function Overview({ profile }: Props) {
                     <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={75} innerRadius={35}>
                       {pieData.map((_:any,i:number)=><Cell key={i} fill={PIE_COLORS[i%PIE_COLORS.length]}/>)}
                     </Pie>
-                    <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
+                    <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
                   </PieChart>
                 </ResponsiveContainer>
                 <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
@@ -743,7 +744,7 @@ export default function Overview({ profile }: Props) {
                 <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                 <XAxis dataKey="name" tick={{fill:tk.textMuted,fontSize:11}}/>
                 <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
+                <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
                 <Legend wrapperStyle={{fontSize:12}}/>
                 <Bar dataKey="Cairo" fill="#f97316" radius={[4,4,0,0]}/>
                 <Bar dataKey="India" fill="#3b82f6" radius={[4,4,0,0]}/>
@@ -759,11 +760,11 @@ export default function Overview({ profile }: Props) {
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(165px,1fr))', gap:'10px' }}>
             {[
-              { label:'Actions in Range',  value:fmt(totalInRange),                                                                                                                                  icon:'⚡' },
-              { label:'Most Active Hour',  value:hourData.reduce((a:any,b:any)=>b.updates>a.updates?b:a,{hour:'—',updates:0}).hour,                                                                  icon:'⏰' },
-              { label:'Peak Day Updates', value:fmt(Math.max(...dailyData.map((d:any)=>d.updates),0)),                                                                                               icon:'🔥' },
-              { label:'Avg Daily',         value:dailyData.filter((d:any)=>d.updates>0).length>0?fmt(Math.round(dailyData.reduce((s:number,d:any)=>s+d.updates,0)/dailyData.filter((d:any)=>d.updates>0).length)):'0', icon:'📊' },
-              { label:'Active Operators',  value:fmt(uniqOpsInRange),                                                                                                                                icon:'👥' },
+              { label:'Players Updated',   value:fmt(totalInRange),                                                                                                                                   icon:'👤' },
+              { label:'Most Active Hour',  value:hourData.reduce((a:any,b:any)=>b.updates>a.updates?b:a,{hour:'—',updates:0}).hour,                                                                   icon:'⏰' },
+              { label:'Peak Day',          value:fmt(Math.max(...dailyData.map((d:any)=>d.updates),0)),                                                                                               icon:'🔥' },
+              { label:'Avg Per Day',       value:dailyData.filter((d:any)=>d.updates>0).length>0?fmt(Math.round(dailyData.reduce((s:number,d:any)=>s+d.updates,0)/dailyData.filter((d:any)=>d.updates>0).length)):'0', icon:'📊' },
+              { label:'Active Operators',  value:fmt(uniqOpsInRange),                                                                                                                                 icon:'👥' },
             ].map(k=>(
               <div key={k.label} style={{ background:tk.bgCard, border:`1px solid ${tk.border}`, borderRadius:'12px', padding:'14px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
@@ -791,8 +792,8 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
-                  <Area type="monotone" dataKey="updates" stroke="#f97316" strokeWidth={2} fill="url(#ag)" name="Updates"/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
+                  <Area type="monotone" dataKey="updates" stroke="#f97316" strokeWidth={2} fill="url(#ag)" name="Task Updates"/>
                 </AreaChart>
               </ResponsiveContainer>
             )}
@@ -808,8 +809,12 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="hour" tick={{fill:tk.textMuted,fontSize:10}} interval={1}/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}
-                    formatter={(v:any)=>[v,'Updates']} labelFormatter={l=>`Hour: ${l}`}/>
+                  <Tooltip
+                    contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}
+                    itemStyle={{color:'#f9fafb'}}
+                    labelStyle={{color:'#f9fafb',fontWeight:600}}
+                    formatter={(v:any)=>[v,'Task Updates']}
+                    labelFormatter={(l:any)=>`Hour: ${l}`}/>
                   <Bar dataKey="updates" radius={[4,4,0,0]}>
                     {hourData.map((entry:any,i:number)=>{
                       const maxV=Math.max(...hourData.map((d:any)=>d.updates))
@@ -835,7 +840,7 @@ export default function Overview({ profile }: Props) {
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
                   <XAxis dataKey="date" tick={{fill:tk.textMuted,fontSize:10}} interval="preserveStartEnd"/>
                   <YAxis tick={{fill:tk.textMuted,fontSize:11}}/>
-                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}}/>
+                  <Tooltip contentStyle={{background:'#111827',border:'1px solid #374151',borderRadius:'8px',color:'#f9fafb',fontSize:'12px'}} itemStyle={{color:'#f9fafb'}} labelStyle={{color:'#f9fafb',fontWeight:600}}/>
                   <Line type="monotone" dataKey="updates" stroke="#a78bfa" strokeWidth={2} dot={false} name="Updates"/>
                 </LineChart>
               </ResponsiveContainer>
