@@ -130,134 +130,81 @@ export default function Overview({ profile }: Props) {
     const [from, to] = getRangeDates(range, customFrom, customTo, customFromH, customToH, customFromM, customToM)
     const from0 = from.slice(0,10), to0 = to.slice(0,10)
 
-    // All queries in parallel — views handle aggregation server-side (no row limits)
+    // All aggregations server-side via views + RPC — no JS row limits
     const [
       { data: kpiData },
       { count: totalPlayersCount },
       { data: sumData },
-      { data: audit },
       { data: opsAll },
       { data: statusData },
       { data: assignedTours },
-      { data: uniqueOps },
     ] = await Promise.all([
       supabase.from('player_kpis').select('*').single(),
       supabase.from('players').select('*',{count:'exact',head:true}),
       supabase.from('team_progress_summary').select('*'),
-      supabase.from('task_audit_log').select('*').gte('changed_at', from).lte('changed_at', to).limit(5000),
       supabase.from('operator_leaderboard').select('*'),
       supabase.from('overall_status_breakdown').select('*'),
-      supabase.from('tournament_assignments').select('tournament_name,assigned_team').not('assigned_team','is',null),
-      supabase.from('operator_leaderboard').select('operator_id,operator_name').not('operator_id','is',null),
+      supabase.from('tournament_assignments')
+        .select('tournament_name,assigned_team')
+        .not('assigned_team','is',null)
+        .eq('is_active', true),
     ])
 
-    // ── Assigned player count (players in assigned active tournaments) ─────
     const assignedTourNames0 = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
+
+    // ── Assigned player count + status breakdown via RPC (no row limits) ──
     let assignedJobCount = 0
+    let assignedStatus: any[] = []
     if (assignedTourNames0.length > 0) {
-      const { count: apc } = await supabase.from('players')
-        .select('*',{count:'exact',head:true})
-        .in('player_last_match_tournament_name', assignedTourNames0)
-      assignedJobCount = apc || 0
+      const [{ data: apc }, { data: aStatus }] = await Promise.all([
+        supabase.rpc('get_assigned_player_count', { tour_names: assignedTourNames0 }),
+        supabase.rpc('get_assigned_status_breakdown', { tour_names: assignedTourNames0 }),
+      ])
+      assignedJobCount = Number(apc) || 0
+      assignedStatus   = aStatus || []
+      setAssignedStatusBreak(assignedStatus)
     }
 
-    // ── Status breakdown scoped to assigned tournaments ─────────────────────
-    // Fetch ALL assigned player IDs in pages (Supabase default cap = 1000 per request)
-    if (assignedTourNames0.length > 0) {
-      const PAGE_SIZE = 1000
-      let assignedIdList: number[] = []
-      let page = 0
-      while (true) {
-        const { data: batch } = await supabase
-          .from('players').select('player_id')
-          .in('player_last_match_tournament_name', assignedTourNames0)
-          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-        if (!batch || batch.length === 0) break
-        assignedIdList = assignedIdList.concat(batch.map((p:any) => p.player_id))
-        if (batch.length < PAGE_SIZE) break  // last page
-        page++
-      }
-
-      if (assignedIdList.length > 0) {
-        // Fetch tasks for ALL assigned players — chunked to avoid URL length limits
-        const CHUNK = 500
-        const statusAgg: Record<string, Record<string, number>> = {}
-        for (let i = 0; i < assignedIdList.length; i += CHUNK) {
-          const chunk = assignedIdList.slice(i, i + CHUNK)
-          const { data: chunkTasks } = await supabase
-            .from('player_tasks')
-            .select('category, status')
-            .in('player_id', chunk)
-          ;(chunkTasks || []).forEach((t: any) => {
-            if (!statusAgg[t.category]) statusAgg[t.category] = {}
-            statusAgg[t.category][t.status] = (statusAgg[t.category][t.status] || 0) + 1
-          })
-        }
-        const assignedRows: any[] = []
-        Object.entries(statusAgg).forEach(([cat, statuses]) => {
-          Object.entries(statuses).forEach(([status, count]) => {
-            assignedRows.push({ category: cat, status, count })
-          })
-        })
-        setAssignedStatusBreak(assignedRows)
-      }
-    }
-
-    // ── Active operators = operators with genuinely claimed jobs right now
-    // A job is claimed if: operator_id IS NOT NULL (not reset)
-    // We count DISTINCT operators who appear in this state
-    const { data: activeOpData } = await supabase
-      .from('player_tasks')
-      .select('operator_id, player_id')
-      .not('operator_id', 'is', null)
-      .in('status', ['In Progress'])
-    // Group by operator — only count operator if they have at least 1 player
-    // where ALL their tasks are claimed by them (not a stale partial claim)
-    const opPlayerMap: Record<string, Set<number>> = {}
-    ;(activeOpData||[]).forEach((t:any) => {
-      if (!opPlayerMap[t.operator_id]) opPlayerMap[t.operator_id] = new Set()
-      opPlayerMap[t.operator_id].add(t.player_id)
+    // ── Audit data via RPC — entire history, no limit ─────────────────────
+    const { data: auditData } = await supabase.rpc('get_daily_activity', {
+      from_ts: from, to_ts: to
     })
-    const activeOpCount = Object.keys(opPlayerMap).length
+    setAuditRaw(auditData||[])
 
-    // ── KPI cards — from player_kpis view (1 player = 1 job) ─────────────
+    // ── Active operators — distinct operators with In Progress tasks ───────
+    // Use overall_status_breakdown to get count (server-side, no limit)
+    const { data: activeOpRaw } = await supabase
+      .from('player_tasks').select('operator_id')
+      .eq('status', 'In Progress').not('operator_id','is',null)
+    const activeOpCount = new Set((activeOpRaw||[]).map((t:any)=>t.operator_id)).size
+
+    // ── KPIs ──────────────────────────────────────────────────────────────
     const kpi = (kpiData || {}) as any
     setKpis({
-      total:         assignedJobCount,           // Assigned Jobs
+      total:         assignedJobCount,
       done:          kpi.completed_players  || 0,
       inProgress:    kpi.inprogress_players || 0,
       blocked:       kpi.blocked_players    || 0,
       players:       totalPlayersCount      || 0,
-      alreadyUpdated: activeOpCount,             // Active Operators (claimed right now)
-      overallTotal:  kpi.total_players      || 0, // for Overall Completion bar
+      alreadyUpdated: activeOpCount,
+      overallTotal:  kpi.total_players      || 0,
     })
 
     setSummary(sumData||[])
     setAllOps(opsAll||[])
-    setStatusBreak(statusData||[])  // {category, status, count} — for pie, breakdown cards, table
-    setAuditRaw(audit||[])
+    setStatusBreak(statusData||[])
 
-    // ── Bar chart: Pending scoped to assigned tournaments ─────────────────
-    const assignedTourNames = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
-
-    let assignedPlayerCount = 0
-    if (assignedTourNames.length > 0) {
-      const { count: apc } = await supabase.from('players')
-        .select('*',{count:'exact',head:true})
-        .in('player_last_match_tournament_name', assignedTourNames)
-      assignedPlayerCount = apc || 0
-    }
-
-    // Build bar chart from overall_status_breakdown
+    // ── Bar chart — use assigned status breakdown from RPC ────────────────
+    const srcRows = assignedStatus.length > 0 ? assignedStatus : (statusData||[])
     const cats = ['Date of Birth','Height & Weight','Hometown Update','Profile Pic Update']
     setCatBreak(cats.map(cat => {
-      const catRows = (statusData||[]).filter((r:any) => r.category === cat)
+      const catRows = srcRows.filter((r:any) => r.category === cat)
       const done   = catRows.filter((r:any) => !['Pending','In Progress'].includes(r.status))
-                            .reduce((s:number,r:any) => s+(r.count||0), 0)
-      const inProg = catRows.find((r:any) => r.status === 'In Progress')?.count || 0
-      const pending = assignedPlayerCount > 0
-        ? Math.max(0, assignedPlayerCount - done - inProg)
-        : catRows.find((r:any) => r.status === 'Pending')?.count || 0
+                            .reduce((s:number,r:any) => s+(Number(r.count)||0), 0)
+      const inProg = Number(catRows.find((r:any) => r.status==='In Progress')?.count)||0
+      const pending = assignedJobCount > 0
+        ? Math.max(0, assignedJobCount - done - inProg)
+        : Number(catRows.find((r:any) => r.status==='Pending')?.count)||0
       return {
         name: cat.replace(' Update','').replace('Height & Weight','Ht/Wt'),
         Done: done, 'In Progress': inProg, Pending: pending,
@@ -277,83 +224,56 @@ export default function Overview({ profile }: Props) {
       pct: v.total>0?Math.round(v.done/v.total*100):0
     })))
 
-    // Build operator stats from audit data within range
-    // Include status breakdown (Yes, Already Updated, Not Found, etc.)
+    // ── Build operator stats from RPC auditData (no row limit) ───────────
+    // auditData rows: {activity_date, hour_of_day, operator_name, team, category, new_status, task_count}
+    // This is pre-aggregated server-side — no individual row processing needed
     type OpEntry = {
       name:string; team:string; total:number
-      // Player task counts
-      playerUpdated:Set<number>; playerAlreadyUpdated:Set<number>
-      playerNotFound:Set<number>; playerNotOnline:Set<number>
-      playerBlocked:Set<number>; playerInProgress:Set<number>
-      players:Set<number>
-      // Pic task counts
-      picUpdated:Set<number>; picAlreadyUpdated:Set<number>
-      picNotFound:Set<number>; picNotOnline:Set<number>
-      picBlocked:Set<number>; picInProgress:Set<number>
-      pics:Set<number>
+      playerUpdated:number; playerAlreadyUpdated:number
+      playerNotFound:number; playerNotOnline:number
+      playerBlocked:number; playerInProgress:number; players:number
+      picUpdated:number; picAlreadyUpdated:number
+      picNotFound:number; picNotOnline:number
+      picBlocked:number; picInProgress:number; pics:number
     }
     const opMap: Record<string, OpEntry> = {}
-    ;(audit||[]).forEach((r:any) => {
-      const k = r.changed_by || r.changed_by_name
-      if (!k) return
+    ;(auditData||[]).forEach((r:any) => {
+      const k = r.operator_name; if (!k) return
+      const cnt = Number(r.task_count) || 0
       if (!opMap[k]) opMap[k] = {
-        name:r.changed_by_name||'Unknown', team:r.changed_by_team||'', total:0,
-        playerUpdated:new Set(), playerAlreadyUpdated:new Set(),
-        playerNotFound:new Set(), playerNotOnline:new Set(),
-        playerBlocked:new Set(), playerInProgress:new Set(), players:new Set(),
-        picUpdated:new Set(), picAlreadyUpdated:new Set(),
-        picNotFound:new Set(), picNotOnline:new Set(),
-        picBlocked:new Set(), picInProgress:new Set(), pics:new Set(),
+        name:r.operator_name, team:r.team||'', total:0,
+        playerUpdated:0,playerAlreadyUpdated:0,playerNotFound:0,
+        playerNotOnline:0,playerBlocked:0,playerInProgress:0,players:0,
+        picUpdated:0,picAlreadyUpdated:0,picNotFound:0,
+        picNotOnline:0,picBlocked:0,picInProgress:0,pics:0,
       }
-      opMap[k].total++
-      const pid = r.player_id
-      const ns  = r.new_status
-      if (r.category === 'Profile Pic Update') {
-        opMap[k].pics.add(pid)
-        if (ns === 'Yes')                      opMap[k].picUpdated.add(pid)
-        else if (ns === 'Already Updated')     opMap[k].picAlreadyUpdated.add(pid)
-        else if (ns === 'Not Found On Any Source') opMap[k].picNotFound.add(pid)
-        else if (ns === 'Player Not Found Online') opMap[k].picNotOnline.add(pid)
-        else if (ns === 'Blocked')             opMap[k].picBlocked.add(pid)
-        else if (ns === 'In Progress')         opMap[k].picInProgress.add(pid)
+      opMap[k].total += cnt
+      const isPic = r.category === 'Profile Pic Update'
+      if (isPic) {
+        opMap[k].pics += cnt
+        if (r.new_status==='Yes')                        opMap[k].picUpdated         += cnt
+        else if (r.new_status==='Already Updated')       opMap[k].picAlreadyUpdated  += cnt
+        else if (r.new_status==='Not Found On Any Source') opMap[k].picNotFound       += cnt
+        else if (r.new_status==='Player Not Found Online') opMap[k].picNotOnline      += cnt
+        else if (r.new_status==='Blocked')               opMap[k].picBlocked         += cnt
+        else if (r.new_status==='In Progress')           opMap[k].picInProgress      += cnt
       } else {
-        opMap[k].players.add(pid)
-        if (ns === 'Yes')                      opMap[k].playerUpdated.add(pid)
-        else if (ns === 'Already Updated')     opMap[k].playerAlreadyUpdated.add(pid)
-        else if (ns === 'Not Found On Any Source') opMap[k].playerNotFound.add(pid)
-        else if (ns === 'Player Not Found Online') opMap[k].playerNotOnline.add(pid)
-        else if (ns === 'Blocked')             opMap[k].playerBlocked.add(pid)
-        else if (ns === 'In Progress')         opMap[k].playerInProgress.add(pid)
+        opMap[k].players += cnt
+        if (r.new_status==='Yes')                        opMap[k].playerUpdated      += cnt
+        else if (r.new_status==='Already Updated')       opMap[k].playerAlreadyUpdated += cnt
+        else if (r.new_status==='Not Found On Any Source') opMap[k].playerNotFound   += cnt
+        else if (r.new_status==='Player Not Found Online') opMap[k].playerNotOnline  += cnt
+        else if (r.new_status==='Blocked')               opMap[k].playerBlocked      += cnt
+        else if (r.new_status==='In Progress')           opMap[k].playerInProgress   += cnt
       }
     })
-    const opsInRange = Object.values(opMap).map(op => ({
-      name:                op.name,
-      team:                op.team,
-      total:               op.total,
-      // Player stats
-      players:             op.players.size,
-      playerUpdated:       op.playerUpdated.size,
-      playerAlreadyUpdated:op.playerAlreadyUpdated.size,
-      playerNotFound:      op.playerNotFound.size,
-      playerNotOnline:     op.playerNotOnline.size,
-      playerBlocked:       op.playerBlocked.size,
-      playerInProgress:    op.playerInProgress.size,
-      // Pic stats
-      pics:                op.pics.size,
-      picUpdated:          op.picUpdated.size,
-      picAlreadyUpdated:   op.picAlreadyUpdated.size,
-      picNotFound:         op.picNotFound.size,
-      picNotOnline:        op.picNotOnline.size,
-      picBlocked:          op.picBlocked.size,
-      picInProgress:       op.picInProgress.size,
-    })).sort((a,b)=>b.total-a.total)
-    setRangeOps(opsInRange)
+    setRangeOps(Object.values(opMap).sort((a,b)=>b.total-a.total))
 
-    // Daily trend
+    // ── Daily trend from auditData ────────────────────────────────────────
     const dayMap: Record<string,number> = {}
-    ;(audit||[]).forEach((r:any) => {
-      const d = r.changed_at?.slice(0,10)
-      if (d) dayMap[d] = (dayMap[d]||0) + 1
+    ;(auditData||[]).forEach((r:any) => {
+      const d = r.activity_date?.slice(0,10)
+      if (d) dayMap[d] = (dayMap[d]||0) + (Number(r.task_count)||0)
     })
     const days: any[] = []
     const cur = new Date(from0); cur.setHours(0,0,0,0)
@@ -365,14 +285,12 @@ export default function Overview({ profile }: Props) {
     }
     setDailyData(days)
 
-    // Hour of day
+    // ── Hour of day from auditData ────────────────────────────────────────
     const hMap: Record<number,number> = {}
     for(let h=0;h<24;h++) hMap[h]=0
-    ;(audit||[]).forEach((r:any) => {
-      const d = r.changed_at?.slice(0,10)
-      if (!d || d < from0 || d > to0) return
-      const h = new Date(r.changed_at).getHours()
-      hMap[h] = (hMap[h]||0)+1
+    ;(auditData||[]).forEach((r:any) => {
+      const h = Number(r.hour_of_day)
+      if (!isNaN(h)) hMap[h] = (hMap[h]||0) + (Number(r.task_count)||0)
     })
     setHourData(Object.entries(hMap).map(([h,v])=>({ hour:`${String(h).padStart(2,'0')}:00`, updates:v as number })))
 
@@ -416,9 +334,9 @@ export default function Overview({ profile }: Props) {
     padding:'9px 12px', borderBottom:`1px solid ${tk.tableRow}`, fontSize:'12px', color:tk.textMuted,
   }
 
-  const opList = Array.from(new Set(auditRaw.map((r:any)=>r.changed_by_name).filter(Boolean)))
+  const opList = Array.from(new Set(auditRaw.map((r:any)=>r.operator_name).filter(Boolean)))
   const filteredRangeOps = opFilter === 'all' ? rangeOps : rangeOps.filter(op => op.name === opFilter)
-  const filteredAudit    = opFilter === 'all' ? auditRaw : auditRaw.filter((r:any) => r.changed_by_name === opFilter)
+  const filteredAudit    = opFilter === 'all' ? auditRaw : auditRaw.filter((r:any) => r.operator_name === opFilter)
 
   // Use assigned-scoped data for pie + breakdown cards; fall back to overall if not loaded
   const scopedBreak = assignedStatusBreak.length > 0 ? assignedStatusBreak : statusBreak
@@ -429,8 +347,8 @@ export default function Overview({ profile }: Props) {
   ).map(([name,value])=>({ name, value })).sort((a:any,b:any)=>b.value-a.value)
 
   const rangeLabel = RANGE_OPTIONS.find(o=>o.value===range)?.label || range
-  const totalInRange = auditRaw.length
-  const uniqOpsInRange = new Set(auditRaw.map((r:any)=>r.changed_by_name).filter(Boolean)).size
+  const totalInRange = auditRaw.reduce((s:number,r:any)=>s+(Number(r.task_count)||0), 0)
+  const uniqOpsInRange = new Set(auditRaw.map((r:any)=>r.operator_name).filter(Boolean)).size
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
@@ -930,8 +848,8 @@ export default function Overview({ profile }: Props) {
               {h3(`Daily Activity — ${opFilter}`)}
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={dailyData.map((d:any)=>{
-                  const count = filteredAudit.filter((r:any)=>r.changed_at?.slice(0,10)===
-                    (fromDate0.slice(0,4)+'-'+d.date)).length
+                  const count = filteredAudit.filter((r:any)=>r.activity_date?.slice(5)===d.date)
+                    .reduce((s:number,r:any)=>s+(Number(r.task_count)||0),0)
                   return { ...d, updates: count }
                 })}>
                   <CartesianGrid strokeDasharray="3 3" stroke={tk.border}/>
