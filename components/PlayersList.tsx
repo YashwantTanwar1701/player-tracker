@@ -276,20 +276,31 @@ export default function PlayersList({ profile }: Props) {
         return updated
       })
 
-      // Re-fetch all 4 tasks from DB to guarantee accuracy, then decide
+      // Re-fetch all 4 tasks from DB — ground truth check
       if (subTab === 'claimed') {
         const { data: freshTasks } = await supabase
           .from('player_tasks').select('*')
           .eq('player_id', player.player_id)
+          .in('category', ALL4)
         if (freshTasks) {
           const freshMap: Record<string,PlayerTask> = {}
           freshTasks.forEach((t:any) => { freshMap[`${t.player_id}__${t.category}`] = t })
           setTasks(prev => ({ ...prev, ...freshMap }))
+
+          // ALL 4 must be in a DONE status (not Pending, not In Progress)
           const allDone = ALL4.every(c => {
             const t = freshMap[`${player.player_id}__${c}`]
+            // Must exist AND be a resolved status
             return t && DONE.includes(t.status)
           })
-          if (allDone) {
+
+          // Double-check: none should be Pending or In Progress
+          const anyIncomplete = ALL4.some(c => {
+            const t = freshMap[`${player.player_id}__${c}`]
+            return !t || ['Pending','In Progress'].includes(t.status)
+          })
+
+          if (allDone && !anyIncomplete) {
             setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
           }
         }
@@ -331,23 +342,38 @@ export default function PlayersList({ profile }: Props) {
   async function unclaim(mode:'sel'|'all') {
     setClaiming(true); setMsg(null)
     const now = new Date().toISOString()
-    // Reset ALL 4 categories to Pending, clear operator and completed_at
     const reset = {
       status: 'Pending', operator_id: null, operator_name: null,
       assigned_to: null, updated_by: null, completed_at: null, updated_at: now
     }
     if (mode==='all') {
+      // Get task IDs to delete audit log entries
+      const { data: taskIds } = await supabase.from('player_tasks')
+        .select('id, player_id').in('category', ALL4)
+        .filter(isAdmin ? 'status' : 'operator_id',
+          isAdmin ? 'in' : 'eq',
+          isAdmin ? '("Pending","In Progress")' : profile.id)
+      const ids2 = (taskIds||[]).map((t:any) => t.id)
+      if (ids2.length) {
+        await supabase.from('task_audit_log').delete().in('task_id', ids2)
+      }
       let q = supabase.from('player_tasks').update(reset).in('category', ALL4)
       if (!isAdmin) q = q.eq('operator_id', profile.id)
       await q
-      setMsg('↩️ All moved back to Available — all statuses reset to Pending')
+      setMsg('↩️ All moved back to Available — all statuses and logs reset')
     } else {
       const ids = Array.from(selected)
       if (!ids.length) { setClaiming(false); return }
-      // Reset all 4 categories for selected players
+      // Delete audit log for these players first
+      const { data: taskIds } = await supabase.from('player_tasks')
+        .select('id').in('player_id', ids).in('category', ALL4)
+      const tids = (taskIds||[]).map((t:any) => t.id)
+      if (tids.length) {
+        await supabase.from('task_audit_log').delete().in('task_id', tids)
+      }
       await supabase.from('player_tasks').update(reset)
         .in('player_id', ids).in('category', ALL4)
-      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses reset to Pending`)
+      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses and logs reset`)
     }
     setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
   }
@@ -355,7 +381,14 @@ export default function PlayersList({ profile }: Props) {
   async function moveToAvail() {
     const ids = Array.from(selected); if (!ids.length) return
     const now = new Date().toISOString()
-    // Reset ALL 4 categories for these players
+    // Delete audit log for these players first
+    const { data: taskIds } = await supabase.from('player_tasks')
+      .select('id').in('player_id', ids).in('category', ALL4)
+    const tids = (taskIds||[]).map((t:any) => t.id)
+    if (tids.length) {
+      await supabase.from('task_audit_log').delete().in('task_id', tids)
+    }
+    // Reset ALL 4 categories
     await supabase.from('player_tasks')
       .update({ status:'Pending', operator_id:null, operator_name:null,
         assigned_to:null, updated_by:null, completed_at:null, updated_at:now })
@@ -363,7 +396,7 @@ export default function PlayersList({ profile }: Props) {
     setPlayers(prev=>prev.filter(p=>!new Set(ids).has(p.player_id)))
     setTotal(prev=>Math.max(0,prev-ids.length))
     setSelected(new Set())
-    setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses reset to Pending`)
+    setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back — all statuses and logs reset`)
   }
 
   // ── Save URL ───────────────────────────────────────────────────────────────
