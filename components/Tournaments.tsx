@@ -2,6 +2,7 @@
 import { useTheme, T } from '@/components/Dashboard'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { cache, TTL } from '@/lib/cache'
 import { UserProfile, Team, TEAM_COLOR } from '@/types'
 
 interface TournamentRow {
@@ -85,7 +86,8 @@ export default function Tournaments({ profile }: Props) {
       // Remove assignment
       if (tournamentName === null) await supabase.from('tournament_assignments').delete().is('tournament_name', null)
       else await supabase.from('tournament_assignments').delete().eq('tournament_name', tournamentName)
-      setRows(prev => prev.map(r => r.tournament_name === tournamentName
+      cache.invalidate('tournament'); cache.invalidate('avail:')
+    setRows(prev => prev.map(r => r.tournament_name === tournamentName
         ? { ...r, assigned_team: null, assigned_by_name: null, assigned_at: null } : r))
       setSaving(null); return
     }
@@ -101,6 +103,7 @@ export default function Tournaments({ profile }: Props) {
     const ids = (pData || []).map((p: any) => p.player_id)
     if (ids.length > 0) await supabase.from('player_tasks').update({ team }).in('player_id', ids).eq('status', 'Pending')
 
+    cache.invalidate('tournament'); cache.invalidate('avail:')
     setRows(prev => prev.map(r => r.tournament_name === tournamentName
       ? { ...r, assigned_team: team, assigned_by_name: profile.full_name || profile.email, assigned_at: new Date().toISOString() } : r))
     setMsg({ type: 'ok', text: `✅ "${tournamentName ?? 'No Tournament'}" → ${team} (${ids.length} players)` })
@@ -115,6 +118,7 @@ export default function Tournaments({ profile }: Props) {
       assigned_team:    row?.assigned_team,
         })
     if (!ok) return
+    cache.invalidate('tournament'); cache.invalidate('avail:')
     setRows(prev => prev.map(r => r.tournament_name === tournamentName ? { ...r, is_active: newVal } : r))
     setMsg({ type: 'ok', text: `${newVal ? '✅ Activated' : '⏸ Deactivated'}: "${tournamentName ?? 'No Tournament'}"` })
     setSaving(null)

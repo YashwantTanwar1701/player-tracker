@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTheme, T } from '@/components/Dashboard'
 import { createClient } from '@/lib/supabase/client'
+import { cache, TTL } from '@/lib/cache'
 import { UserProfile, CATEGORIES, TEAM_COLOR } from '@/types'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -131,6 +132,15 @@ export default function Overview({ profile }: Props) {
     const from0 = from.slice(0,10), to0 = to.slice(0,10)
 
     // All aggregations server-side via views + RPC — no JS row limits
+    // Use cache for slow-changing data
+    const [kpiC, sumC, opsC, statusC, toursC] = [
+      cache.get<any>('ov:kpi'),
+      cache.get<any[]>('ov:summary'),
+      cache.get<any[]>('ov:ops'),
+      cache.get<any[]>('ov:status'),
+      cache.get<any[]>('ov:tours'),
+    ]
+
     const [
       { data: kpiData },
       { count: totalPlayersCount },
@@ -139,16 +149,32 @@ export default function Overview({ profile }: Props) {
       { data: statusData },
       { data: assignedTours },
     ] = await Promise.all([
-      supabase.from('player_kpis').select('*').single(),
-      supabase.from('players').select('*',{count:'exact',head:true}),
-      supabase.from('team_progress_summary').select('*'),
-      supabase.from('operator_leaderboard').select('*'),
-      supabase.from('overall_status_breakdown').select('*'),
-      supabase.from('tournament_assignments')
+      kpiC    ? Promise.resolve({data:kpiC})          : supabase.from('player_kpis').select('*').single(),
+      Promise.resolve({count:null as number|null}), // fetched separately below if needed
+      sumC    ? Promise.resolve({data:sumC})          : supabase.from('team_progress_summary').select('*'),
+      opsC    ? Promise.resolve({data:opsC})          : supabase.from('operator_leaderboard').select('*'),
+      statusC ? Promise.resolve({data:statusC})       : supabase.from('overall_status_breakdown').select('*'),
+      toursC  ? Promise.resolve({data:toursC})        : supabase.from('tournament_assignments')
         .select('tournament_name,assigned_team')
         .not('assigned_team','is',null)
         .eq('is_active', true),
     ])
+
+    // Get total player count
+    const totalPlayersCount2 = await (async () => {
+      const c2 = cache.get<number>('ov:playercount')
+      if (c2 !== null) return c2
+      const { count } = await supabase.from('players').select('*',{count:'exact',head:true})
+      cache.set('ov:playercount', count||0, TTL.OVERVIEW)
+      return count||0
+    })()
+
+    // Cache the results
+    if (!kpiC    && kpiData)     cache.set('ov:kpi',     kpiData,     TTL.OVERVIEW)
+    if (!sumC    && sumData)     cache.set('ov:summary',  sumData,    TTL.OVERVIEW)
+    if (!opsC    && opsAll)      cache.set('ov:ops',      opsAll,     TTL.OVERVIEW)
+    if (!statusC && statusData)  cache.set('ov:status',   statusData, TTL.OVERVIEW)
+    if (!toursC  && assignedTours) cache.set('ov:tours',  assignedTours, TTL.TOURNAMENTS)
 
     const assignedTourNames0 = (assignedTours||[]).map((t:any)=>t.tournament_name).filter(Boolean)
 
@@ -185,7 +211,7 @@ export default function Overview({ profile }: Props) {
       done:          kpi.completed_players  || 0,
       inProgress:    kpi.inprogress_players || 0,
       blocked:       kpi.blocked_players    || 0,
-      players:       totalPlayersCount      || 0,
+      players:       totalPlayersCount2     || 0,
       alreadyUpdated: activeOpCount,
       overallTotal:  kpi.total_players      || 0,
     })

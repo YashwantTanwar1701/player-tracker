@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { cache, TTL } from '@/lib/cache'
 import { Player, PlayerTask, UserProfile, Status, Category, CATEGORIES, STATUSES, STATUS_COLOR } from '@/types'
 import { useTheme, T } from '@/components/Dashboard'
 
@@ -93,9 +94,19 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Available ──────────────────────────────────────────────────────────────
   async function doAvailable(tourNames: string[]) {
-    // Use Postgres RPC function — does the filtering server-side, no row limits
-    const { data: availData, error } = await supabase
-      .rpc('get_available_player_ids', { tour_names: tourNames })
+    // Use Postgres RPC — cache result for 2 min to avoid repeated heavy queries
+    const cacheKey = `avail:${tourNames.sort().join(',')}`
+    let availData = cache.get<any[]>(cacheKey)
+    let error: any = null
+    if (!availData) {
+      const res = await supabase.rpc('get_available_player_ids', { tour_names: tourNames })
+      error = res.error
+      if (!error) {
+        availData = res.data
+        cache.set(cacheKey, availData, TTL.PLAYERS_LIST)
+      }
+    }
+    if (!availData) availData = []
 
     if (error) {
       console.error('get_available_player_ids error:', error)
@@ -168,14 +179,19 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Completed ──────────────────────────────────────────────────────────────
   async function doCompleted(tourNames: string[]) {
-    // Use completed_players view — already has all 3 core tasks done, ordered by completed_at DESC
-    // Then intersect with tournament filter
-    const { data: completedView } = await supabase
-      .from('completed_players')
-      .select('player_id, completed_at')
-      .in('tournament_name', tourNames)
-      .order('completed_at', { ascending: false, nullsFirst: false })
-      .limit(COMP_LIMIT)
+    // Use completed_players view with cache
+    const compKey = `completed:${tourNames.sort().join(',')}`
+    let completedView = cache.get<any[]>(compKey)
+    if (!completedView) {
+      const { data } = await supabase
+        .from('completed_players')
+        .select('player_id, completed_at')
+        .in('tournament_name', tourNames)
+        .order('completed_at', { ascending: false, nullsFirst: false })
+        .limit(COMP_LIMIT)
+      completedView = data || []
+      cache.set(compKey, completedView, TTL.COMPLETED)
+    }
 
     if (!completedView?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
@@ -325,7 +341,11 @@ export default function PlayersList({ profile }: Props) {
           completed_at: null })  // clear any previous completion
       }
     }
-    if (ups.length) await supabase.from('player_tasks').upsert(ups,{onConflict:'player_id,category'})
+    if (ups.length) {
+      await supabase.from('player_tasks').upsert(ups,{onConflict:'player_id,category'})
+      cache.invalidate('avail:')   // claimed players no longer available
+      cache.invalidate('completed:')
+    }
     // Refresh tasks
     const { data:td } = await supabase.from('player_tasks').select('*').in('player_id',ids)
     const newTasks = {...tasks}
@@ -333,6 +353,7 @@ export default function PlayersList({ profile }: Props) {
     setTasks(newTasks)
     setPlayers(prev=>prev.filter(p=>!new Set(ids).has(p.player_id)))
     setTotal(prev=>Math.max(0,prev-ids.length))
+    cache.invalidate('avail:'); cache.invalidate('completed:')
     setSelected(new Set()); setClaiming(false)
     setMsg(`✅ Claimed ${ids.length} player${ids.length>1?'s':''} — check Claimed tab`)
   }
