@@ -55,9 +55,12 @@ export default function Tournaments({ profile }: Props) {
     // Step 2: Get all tournament names + counts via fast RPC function
     const { data: tourList } = await supabase.rpc('get_tournament_list')
 
-    const allTourNames = (tourList || []).map((t: any) => t.tournament_name as string)
+    const allTourNames = (tourList || []).map((t: any) => t.tournament_name as string | null)
     const playerCountMap: Record<string, number> = {}
-    ;(tourList || []).forEach((t: any) => { playerCountMap[t.tournament_name] = Number(t.player_count) || 0 })
+    ;(tourList || []).forEach((t: any) => {
+      const key = t.tournament_name ?? '__NULL__'
+      playerCountMap[key] = Number(t.player_count) || 0
+    })
 
     // Build map of assignments for quick lookup
     const assignMap: Record<string, any> = {}
@@ -66,11 +69,12 @@ export default function Tournaments({ profile }: Props) {
     })
 
     // Build rows: assigned tournaments + unassigned ones from players
-    const rows: TournamentRow[] = allTourNames.map(name => {
-      const a = assignMap[name]
+    const rows: TournamentRow[] = allTourNames.map((name: string | null) => {
+      const key = name ?? '__NULL__'
+      const a = assignMap[key]
       return {
         tournament_name:  name,
-        player_count:     playerCountMap[name] || a?.player_count || 0,
+        player_count:     playerCountMap[key] || a?.player_count || 0,
         assigned_team:    a?.assigned_team || null,
         is_active:        a?.is_active ?? null,
         assigned_by_name: a?.assigned_by_name || null,
