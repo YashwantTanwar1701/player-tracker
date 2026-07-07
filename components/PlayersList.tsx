@@ -54,6 +54,22 @@ export default function PlayersList({ profile }: Props) {
   const [modalNotes, setModalNotes] = useState('')
   const [savingModal,setSavingModal]= useState(false)
 
+  const reloadTournaments = useCallback(() => {
+    cache.invalidate('tournaments')
+    cache.invalidate('avail:')
+    cache.invalidate('completed:')
+    setTourReady(false)
+    setTours([])
+    supabase.from('tournament_assignments')
+      .select('tournament_name, assigned_team, is_active')
+      .then(({ data }) => {
+        const result = (data || []) as TournamentMeta[]
+        cache.set('tournaments', result, TTL.TOURNAMENTS)
+        setTours(result)
+        setTourReady(true)
+      })
+  }, [supabase])
+
   // ── Tours ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     supabase.from('tournament_overview')
@@ -76,6 +92,7 @@ export default function PlayersList({ profile }: Props) {
     setLoading(true); setSelected(new Set())
     if (!tourReady) { setLoading(false); return }
     if (!isAdmin && myTours.length === 0) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    try {
 
     const tourNames = filterTour
       ? [filterTour]
@@ -86,6 +103,10 @@ export default function PlayersList({ profile }: Props) {
     if (subTab === 'completed') { await doCompleted(tourNames); return }
     if (subTab === 'claimed')   { await doClaimed(tourNames);   return }
     await doAvailable(tourNames)
+    } catch (err) {
+      console.error('fetchPlayers error:', err)
+      setLoading(false)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tourReady, page, search, filterTour, filterGend, filterOp, subTab])
 
@@ -94,28 +115,59 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Available ──────────────────────────────────────────────────────────────
   async function doAvailable(tourNames: string[]) {
-    // Use Postgres RPC — cache result for 2 min to avoid repeated heavy queries
-    const cacheKey = `avail:${tourNames.sort().join(',')}`
-    let availData = cache.get<any[]>(cacheKey)
-    let error: any = null
-    if (!availData) {
-      const res = await supabase.rpc('get_available_player_ids', { tour_names: tourNames })
-      error = res.error
-      if (!error) {
-        availData = res.data
-        cache.set(cacheKey, availData, TTL.PLAYERS_LIST)
-      }
+    // Step 1: Get all player IDs in these tournaments (paginated to avoid 1000 row cap)
+    const tourIds: number[] = []
+    let page0 = 0
+    const PAGE_SIZE = 1000
+    while (true) {
+      const { data: batch } = await supabase
+        .from('players')
+        .select('player_id')
+        .in('player_last_match_tournament_name', tourNames)
+        .range(page0 * PAGE_SIZE, (page0 + 1) * PAGE_SIZE - 1)
+      if (!batch || batch.length === 0) break
+      batch.forEach((p: any) => tourIds.push(p.player_id as number))
+      if (batch.length < PAGE_SIZE) break
+      page0++
     }
-    if (!availData) availData = []
 
-    if (error) {
-      console.error('get_available_player_ids error:', error)
+    if (tourIds.length === 0) {
       setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
     }
 
-    let availIds = (availData || []).map((r: any) => r.player_id as number)
+    // Step 2: Get task states for all tournament players in chunks
+    // Available = player where ALL 3 core tasks are Pending AND operator_id IS NULL
+    const CHUNK = 500
+    const pendingPlayers: Record<number, { pendingCount: number; totalCore: number }> = {}
 
-    // Apply search + gender filter client-side (small result set after RPC)
+    for (let i = 0; i < tourIds.length; i += CHUNK) {
+      const chunk = tourIds.slice(i, i + CHUNK)
+      const { data: taskChunk } = await supabase
+        .from('player_tasks')
+        .select('player_id, category, status, operator_id')
+        .in('player_id', chunk)
+        .in('category', CORE)
+
+      ;(taskChunk || []).forEach((t: any) => {
+        if (!pendingPlayers[t.player_id]) {
+          pendingPlayers[t.player_id] = { pendingCount: 0, totalCore: 0 }
+        }
+        pendingPlayers[t.player_id].totalCore++
+        // Only count as pending if BOTH status=Pending AND operator_id is null
+        if (t.status === 'Pending' && !t.operator_id) {
+          pendingPlayers[t.player_id].pendingCount++
+        }
+      })
+    }
+
+    // Available = player has exactly 3 core tasks, ALL are Pending with no operator
+    let availIds = tourIds.filter(id => {
+      const p = pendingPlayers[id]
+      if (!p) return false  // no tasks at all — skip
+      return p.totalCore === CORE.length && p.pendingCount === CORE.length
+    })
+
+    // Apply search + gender filter
     if (search || filterGend !== 'All') {
       if (availIds.length > 0) {
         let fq = supabase.from('players').select('player_id, full_name, player_gender')
@@ -362,22 +414,32 @@ export default function PlayersList({ profile }: Props) {
   async function unclaim(mode:'sel'|'all') {
     setClaiming(true); setMsg(null)
     const now = new Date().toISOString()
+    // Full reset — ALL 4 categories back to Pending, clear ALL operator fields
     const reset = {
       status: 'Pending', operator_id: null, operator_name: null,
       assigned_to: null, updated_by: null, completed_at: null, updated_at: now
     }
-    if (mode==='all') {
+    if (mode === 'all') {
+      // Reset all tasks for this operator (or all if admin)
       let q = supabase.from('player_tasks').update(reset).in('category', ALL4)
       if (!isAdmin) q = q.eq('operator_id', profile.id)
-      await q
+      const { error } = await q
+      if (error) console.error('Unclaim all error:', error)
       setMsg('↩️ All moved back to Available — all statuses reset to Pending')
     } else {
       const ids = Array.from(selected)
       if (!ids.length) { setClaiming(false); return }
-      await supabase.from('player_tasks').update(reset)
-        .in('player_id', ids).in('category', ALL4)
-      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} moved back to Available`)
+      // Reset ALL 4 categories for selected player IDs — no operator filter
+      // Admin moving jobs must be able to reset any player
+      const { error } = await supabase.from('player_tasks')
+        .update(reset)
+        .in('player_id', ids)
+        .in('category', ALL4)
+      if (error) console.error('Unclaim error:', error)
+      setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} fully reset to Pending`)
     }
+    cache.invalidate('avail:')
+    cache.invalidate('completed:')
     setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
   }
 
@@ -436,10 +498,19 @@ export default function PlayersList({ profile }: Props) {
     <div style={{background:tk.bgCard,border:`1px solid ${tk.border}`,borderRadius:'12px',padding:'48px',textAlign:'center'}}>
       <div style={{fontSize:'32px',marginBottom:'12px'}}>📋</div>
       <h3 style={{color:tk.text,fontWeight:600,margin:'0 0 8px'}}>No Competitions Assigned</h3>
-      <p style={{color:tk.textMuted,fontSize:'13px',margin:0}}>
+      <p style={{color:tk.textMuted,fontSize:'13px',margin:'0 0 20px'}}>
         {isAdmin ? 'Go to Tournaments tab and assign competitions to Cairo or India.'
           : `Ask your admin to assign competitions to ${profile.team} in the Tournaments tab.`}
       </p>
+      <p style={{color:tk.textFaint,fontSize:'11px',margin:'0 0 16px'}}>
+        If competitions are already assigned, the data may not have loaded yet.
+      </p>
+      <button
+        onClick={() => reloadTournaments()}
+        style={{background:'#f97316',border:'none',color:'#fff',fontWeight:700,
+          fontSize:'14px',padding:'10px 24px',borderRadius:'8px',cursor:'pointer'}}>
+        🔄 Retry Loading Competitions
+      </button>
     </div>
   )
 

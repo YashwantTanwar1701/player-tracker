@@ -35,9 +35,81 @@ export default function Tournaments({ profile }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase.from('tournament_overview').select('*')
-    if (!error) setRows((data || []) as TournamentRow[])
+
+    // Check cache first
+    const cached = cache.get<TournamentRow[]>('tournament_rows')
+    if (cached) { setRows(cached); setLoading(false); return }
+
+    // Step 1: Fast query — just the assignments table (no JOINs)
+    const { data: assignments, error } = await supabase
+      .from('tournament_assignments')
+      .select('tournament_name, assigned_team, is_active, assigned_by_name, updated_at, player_count')
+      .order('assigned_team', { ascending: true, nullsFirst: false })
+
+    if (error || !assignments) {
+      console.error('Tournament load error:', error)
+      setLoading(false)
+      return
+    }
+
+    // Step 2: Get all tournament names + counts via fast RPC function
+    const { data: tourList } = await supabase.rpc('get_tournament_list')
+
+    const allTourNames = (tourList || []).map((t: any) => t.tournament_name as string)
+    const playerCountMap: Record<string, number> = {}
+    ;(tourList || []).forEach((t: any) => { playerCountMap[t.tournament_name] = Number(t.player_count) || 0 })
+
+    // Build map of assignments for quick lookup
+    const assignMap: Record<string, any> = {}
+    assignments.forEach((a: any) => {
+      assignMap[a.tournament_name ?? '__NULL__'] = a
+    })
+
+    // Build rows: assigned tournaments + unassigned ones from players
+    const rows: TournamentRow[] = allTourNames.map(name => {
+      const a = assignMap[name]
+      return {
+        tournament_name:  name,
+        player_count:     playerCountMap[name] || a?.player_count || 0,
+        assigned_team:    a?.assigned_team || null,
+        is_active:        a?.is_active ?? null,
+        assigned_by_name: a?.assigned_by_name || null,
+        assigned_at:      a?.updated_at || null,
+        dob_pending:      0,
+        htw_pending:      0,
+        htn_pending:      0,
+        pic_pending:      0,
+        total_done:       0,
+        total_tasks:      0,
+      }
+    }).sort((a, b) => b.player_count - a.player_count)  // sort by player count DESC
+
+    cache.set('tournament_rows', rows, TTL.TOURNAMENTS)
+    setRows(rows)
     setLoading(false)
+
+    // Step 3: Load progress counts in background via fast RPC
+    try {
+      const { data: progress } = await supabase.rpc('get_tournament_progress')
+      if (progress) {
+        const progressMap: Record<string, any> = {}
+        progress.forEach((r: any) => { progressMap[r.tournament_name ?? '__NULL__'] = r })
+        setRows(prev => {
+          const updated = prev.map(r => {
+            const key = r.tournament_name ?? '__NULL__'
+            const p = progressMap[key]
+            return p ? { ...r,
+              total_done:  Number(p.total_done)  || 0,
+              total_tasks: Number(p.total_tasks) || 0,
+            } : r
+          })
+          // Re-sort by player count DESC after enrichment
+          return updated.sort((a, b) => b.player_count - a.player_count)
+        })
+      }
+    } catch (e) {
+      console.warn('Background progress load failed:', e)
+    }
   }, [supabase])
 
   useEffect(() => { load() }, [load])
@@ -156,19 +228,7 @@ export default function Tournaments({ profile }: Props) {
     fontSize: '12px', color: tk.textMuted, verticalAlign: 'middle',
   }
 
-  function Pill({ count, label, color }: { count: number; label: string; color: string }) {
-    return (
-      <span title={`${label}: ${count} pending`}
-        style={{ display: 'inline-flex', alignItems: 'center', gap: '3px',
-          background: count === 0 ? '#052e16' : '#1c1917',
-          border: `1px solid ${count === 0 ? '#166534' : '#44403c'}`,
-          color: count === 0 ? '#86efac' : color,
-          fontSize: '11px', fontWeight: 700, padding: '2px 7px', borderRadius: '99px', marginRight: '3px' }}>
-        {count === 0 ? '✓' : count}
-        <span style={{ fontSize: '9px', fontWeight: 400, opacity: 0.7 }}>{label}</span>
-      </span>
-    )
-  }
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -234,7 +294,6 @@ export default function Tournaments({ profile }: Props) {
                 <th style={{ ...th, textAlign: 'center' }}>Players</th>
                 <th style={{ ...th, textAlign: 'center' }}>Assigned Team</th>
                 <th style={{ ...th, textAlign: 'center' }}>Active</th>
-                <th style={th}>Pending Tasks</th>
                 <th style={th}>Progress</th>
                 <th style={th}>By</th>
                 <th style={th}>Date</th>
@@ -249,13 +308,13 @@ export default function Tournaments({ profile }: Props) {
                   ))}</tr>
                 ))
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={11} style={{ ...td, textAlign:'center', color:tk.textFaint, padding:'48px' }}>No competitions found</td></tr>
+                <tr><td colSpan={10} style={{ ...td, textAlign:'center', color:tk.textFaint, padding:'48px' }}>No competitions found</td></tr>
               ) : filtered.map((row, i) => {
                 const key     = row.tournament_name ?? '__NULL__'
                 const isBusy  = saving === key
                 const isAdmin = profile.role === 'admin' || profile.team === 'Admin'
                 const isActive = row.is_active !== false
-                const pct     = row.total_tasks > 0 ? Math.round(row.total_done / row.total_tasks * 100) : 0
+                const pct = row.total_tasks > 0 ? Math.round(row.total_done / row.total_tasks * 100) : 0
 
                 return (
                   <tr key={key} style={{ opacity: isBusy ? 0.5 : 1,
@@ -316,24 +375,29 @@ export default function Tournaments({ profile }: Props) {
                       )}
                     </td>
 
-                    {/* Pending pills */}
-                    <td style={td}>
-                      <div style={{ display:'flex', flexWrap:'wrap', gap:'2px' }}>
-                        <Pill count={row.dob_pending} label="DOB"  color="#f59e0b" />
-                        <Pill count={row.htw_pending} label="Ht/Wt" color="#60a5fa" />
-                        <Pill count={row.htn_pending} label="Town" color="#a78bfa" />
-                        <Pill count={row.pic_pending} label="Pic"  color="#f472b6" />
-                      </div>
-                    </td>
+
 
                     {/* Progress */}
-                    <td style={{ ...td, minWidth: '100px' }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                        <div style={{ flex:1, height:'6px', background:tk.tableHead, borderRadius:'99px', overflow:'hidden' }}>
-                          <div style={{ height:'100%', width:`${pct}%`, background:pct===100?'#16a34a':'#f97316', borderRadius:'99px' }} />
+                    <td style={{ ...td, minWidth: '130px' }}>
+                      {row.total_tasks === 0 ? (
+                        <span style={{ color:tk.textFaint, fontSize:'11px' }}>
+                          {row.assigned_team ? 'Loading…' : '—'}
+                        </span>
+                      ) : (
+                        <div>
+                          <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'3px' }}>
+                            <div style={{ flex:1, height:'7px', background:tk.tableHead, borderRadius:'99px', overflow:'hidden' }}>
+                              <div style={{ height:'100%', width:`${pct}%`,
+                                background: pct===100?'#16a34a':pct>50?'#f97316':'#2563eb',
+                                borderRadius:'99px', transition:'width 0.3s' }} />
+                            </div>
+                            <span style={{ color:tk.textMuted, fontSize:'11px', minWidth:'34px', textAlign:'right', fontWeight:600 }}>{pct}%</span>
+                          </div>
+                          <span style={{ color:tk.textFaint, fontSize:'10px' }}>
+                            {row.total_done.toLocaleString()} / {(row.total_tasks/4).toLocaleString()} players
+                          </span>
                         </div>
-                        <span style={{ color:tk.textMuted, fontSize:'11px', minWidth:'30px' }}>{pct}%</span>
-                      </div>
+                      )}
                     </td>
 
                     {/* Assigned by */}
