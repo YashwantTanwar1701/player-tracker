@@ -86,7 +86,7 @@ export default function Tournaments({ profile }: Props) {
         total_done:       0,
         total_tasks:      0,
       }
-    }).sort((a, b) => b.player_count - a.player_count)  // sort by player count DESC
+    }).sort((a: TournamentRow, b: TournamentRow) => b.player_count - a.player_count)
 
     cache.set('tournament_rows', rows, TTL.TOURNAMENTS)
     setRows(rows)
