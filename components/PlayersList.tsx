@@ -738,7 +738,7 @@ export default function PlayersList({ profile }: Props) {
                     </td>
 
                     <td style={{...td,fontWeight:600,whiteSpace:'nowrap'}}>
-                      <a href={`https://www.google.com/search?q=${encodeURIComponent(`${player.full_name} ${player.last_team_name||''}`.trim())}`}
+                      <a href={`https://www.bing.com/search?q=${encodeURIComponent(`${player.full_name} ${player.last_team_name||''}`.trim())}`}
                         target="_blank" rel="noreferrer"
                         style={{color:tk.text,textDecoration:'none'}}
                         onMouseEnter={e=>(e.currentTarget.style.textDecoration='underline')}
