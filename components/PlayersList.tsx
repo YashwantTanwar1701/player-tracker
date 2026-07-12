@@ -200,37 +200,42 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Claimed ────────────────────────────────────────────────────────────────
   async function doClaimed(_tourNames: string[]) {
-    // Claimed = operator_id IS NOT NULL AND not ALL 4 tasks fully done
-    // Must show players with MIXED statuses (some done, some in-progress)
-    // Step 1: Get all player_ids where operator_id is set
-    let tq = supabase.from('player_tasks').select('player_id, category, status')
+    // Claimed definition:
+    //   operator_id IS NOT NULL (player was claimed by someone)
+    //   AND at least one task is still NOT done (Pending or In Progress)
+    //   = player is actively being worked on
+    //
+    // This correctly handles mixed states like:
+    //   DOB=Not Found, HT/WT=Not Found, Hometown=In Progress, Pic=In Progress
+    //   → still in Claimed (Hometown + Pic not done yet)
+
+    let tq = supabase.from('player_tasks')
+      .select('player_id, category, status')
       .in('category', ALL4)
       .not('operator_id', 'is', null)
     if (!isAdmin)                tq = tq.eq('operator_id', profile.id)
     else if (filterOp !== 'all') tq = tq.eq('operator_name', filterOp)
 
-    const { data: allClaimedTasks } = await tq
-    if (!allClaimedTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    const { data: claimedTasks } = await tq
+    if (!claimedTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    // Group by player — include player if NOT all 4 tasks are fully done
-    const byPlayer: Record<number, Set<string>> = {}
-    allClaimedTasks.forEach((t:any) => {
-      if (!byPlayer[t.player_id]) byPlayer[t.player_id] = new Set()
-      if (DONE.includes(t.status)) byPlayer[t.player_id].add(t.category)
+    // Build per-player status map
+    const playerStatus: Record<number, { total: number; done: number }> = {}
+    claimedTasks.forEach((t: any) => {
+      if (!playerStatus[t.player_id]) playerStatus[t.player_id] = { total: 0, done: 0 }
+      playerStatus[t.player_id].total++
+      if (DONE.includes(t.status)) playerStatus[t.player_id].done++
     })
 
-    // Keep players where at least 1 of the 4 tasks is NOT done yet
-    const claimedPlayerIds = Object.entries(byPlayer)
-      .filter(([, doneCats]) => !ALL4.every(c => doneCats.has(c)))
+    // Claimed = has tasks AND not ALL tasks are done
+    // If total=4 and done=4 → fully complete → goes to Completed, not Claimed
+    // If total=4 and done<4 → still in progress → show in Claimed
+    // If total=4 and done=0 → just claimed (all In Progress) → show in Claimed
+    const claimedIds = Object.entries(playerStatus)
+      .filter(([, s]) => s.total > 0 && s.done < s.total)
       .map(([id]) => parseInt(id))
 
-    if (!claimedPlayerIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-
-    // Dummy assignment to satisfy TS — actual filtering already done above
-    let tq2 = supabase.from('player_tasks').select('player_id').in('category', ALL4).not('operator_id', 'is', null)
-    void tq2  // unused but keeps pattern consistent
-
-    const claimedIds = claimedPlayerIds
+    if (!claimedIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
     let q = supabase.from('players')
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count: 'exact' })
@@ -379,12 +384,11 @@ export default function PlayersList({ profile }: Props) {
           freshTasks.forEach((t:any) => { freshMap[`${t.player_id}__${t.category}`] = t })
           setTasks(prev => ({ ...prev, ...freshMap }))
 
-          // ALL 4 must be in a DONE status (not Pending, not In Progress)
-          // Player moves to Completed only when ALL 4 categories are resolved
-          const allDone = ALL4.every(c => {
-            const t = freshMap[`${player.player_id}__${c}`]
-            return t && DONE.includes(t.status)
-          })
+          // ALL 4 must be done to move to Completed
+          // Count done tasks from fresh DB fetch
+          const totalTasks = freshTasks.length
+          const doneTasks2 = freshTasks.filter((t:any) => DONE.includes(t.status)).length
+          const allDone = totalTasks > 0 && doneTasks2 === totalTasks
 
           if (allDone) {
             setPlayers(prev => prev.filter(p => p.player_id !== player.player_id))
