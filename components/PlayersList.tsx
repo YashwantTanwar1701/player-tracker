@@ -200,18 +200,37 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Claimed ────────────────────────────────────────────────────────────────
   async function doClaimed(_tourNames: string[]) {
-    // Fetch ALL claimed tasks — don't filter by tournament
-    // Operators must see their jobs regardless of which tournament tab is active
-    let tq = supabase.from('player_tasks').select('player_id')
+    // Claimed = operator_id IS NOT NULL AND not ALL 4 tasks fully done
+    // Must show players with MIXED statuses (some done, some in-progress)
+    // Step 1: Get all player_ids where operator_id is set
+    let tq = supabase.from('player_tasks').select('player_id, category, status')
       .in('category', ALL4)
       .not('operator_id', 'is', null)
-      .in('status', ['Pending', 'In Progress'])
     if (!isAdmin)                tq = tq.eq('operator_id', profile.id)
     else if (filterOp !== 'all') tq = tq.eq('operator_name', filterOp)
 
-    const { data: claimedT } = await tq
-    if (!claimedT?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-    const claimedIds = Array.from(new Set(claimedT.map((t:any) => t.player_id as number)))
+    const { data: allClaimedTasks } = await tq
+    if (!allClaimedTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+
+    // Group by player — include player if NOT all 4 tasks are fully done
+    const byPlayer: Record<number, Set<string>> = {}
+    allClaimedTasks.forEach((t:any) => {
+      if (!byPlayer[t.player_id]) byPlayer[t.player_id] = new Set()
+      if (DONE.includes(t.status)) byPlayer[t.player_id].add(t.category)
+    })
+
+    // Keep players where at least 1 of the 4 tasks is NOT done yet
+    const claimedPlayerIds = Object.entries(byPlayer)
+      .filter(([, doneCats]) => !ALL4.every(c => doneCats.has(c)))
+      .map(([id]) => parseInt(id))
+
+    if (!claimedPlayerIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+
+    // Dummy assignment to satisfy TS — actual filtering already done above
+    let tq2 = supabase.from('player_tasks').select('player_id').in('category', ALL4).not('operator_id', 'is', null)
+    void tq2  // unused but keeps pattern consistent
+
+    const claimedIds = claimedPlayerIds
 
     let q = supabase.from('players')
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name', { count: 'exact' })
@@ -574,8 +593,12 @@ export default function PlayersList({ profile }: Props) {
       {/* Filters */}
       <div style={{background:tk.bgCard,border:`1px solid ${tk.border}`,borderRadius:'12px',padding:'12px 16px'}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center'}}>
-          <input type="text" placeholder="🔍 Search by Player ID or Name…" value={search}
-            onChange={e=>setSearch(e.target.value)} style={{...inp,flex:1,minWidth:'180px'}}/>
+          <input type="text"
+            placeholder={subTab==='completed' ? '🔍 Type Player ID or Name + press Enter to search…' : '🔍 Search by Player ID or Name…'}
+            value={search}
+            onChange={e=>setSearch(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter') fetchPlayers() }}
+            style={{...inp,flex:1,minWidth:'180px'}}/>
 
           <select value={filterTour} onChange={e=>setFilterTour(e.target.value)} style={{...inp,minWidth:'200px'}}>
             <option value="">All Tournaments ({myTours.length})</option>
