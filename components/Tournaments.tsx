@@ -318,7 +318,10 @@ export default function Tournaments({ profile }: Props) {
                 const isBusy  = saving === key
                 const isAdmin = profile.role === 'admin' || profile.team === 'Admin'
                 const isActive = row.is_active !== false
-                const pct = row.total_tasks > 0 ? Math.round(row.total_done / row.total_tasks * 100) : 0
+                // total_tasks = players × 4 categories, so divide by 4 for player count
+                const totalPlayers = Math.round(row.total_tasks / 4)
+                const donePlayers  = Math.round(row.total_done  / 4)
+                const pct = totalPlayers > 0 ? Math.round(donePlayers / totalPlayers * 100) : 0
 
                 return (
                   <tr key={key} style={{ opacity: isBusy ? 0.5 : 1,
@@ -398,7 +401,7 @@ export default function Tournaments({ profile }: Props) {
                             <span style={{ color:tk.textMuted, fontSize:'11px', minWidth:'34px', textAlign:'right', fontWeight:600 }}>{pct}%</span>
                           </div>
                           <span style={{ color:tk.textFaint, fontSize:'10px' }}>
-                            {row.total_done.toLocaleString()} / {(row.total_tasks/4).toLocaleString()} players
+                            {donePlayers.toLocaleString()} / {totalPlayers.toLocaleString()} players
                           </span>
                         </div>
                       )}

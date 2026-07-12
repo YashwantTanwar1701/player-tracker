@@ -376,38 +376,53 @@ export default function PlayersList({ profile }: Props) {
     setSavingModal(false); setOpenModal(null)
   }
 
-  // ── Claim ──────────────────────────────────────────────────────────────────
-  async function claim() {
-    if (!selected.size) return
+  // ── Claim (shared logic) ─────────────────────────────────────────────────
+  async function claimIds(ids: number[]) {
+    if (!ids.length) return
     setClaiming(true); setMsg(null)
-    const ids = Array.from(selected)
     const now = new Date().toISOString()
     const opLabel = profile.full_name || profile.email
     const ups: any[] = []
     for (const pid of ids) {
       for (const cat of ALL4) {
-        // Always upsert - sets all 4 categories to In Progress for this operator
         ups.push({ player_id:pid, category:cat, status:'In Progress',
           assigned_to:profile.id, operator_id:profile.id, operator_name:opLabel,
-          updated_by:profile.id, team:opTeam, updated_at:now,
-          completed_at: null })  // clear any previous completion
+          updated_by:profile.id, team:opTeam, updated_at:now, completed_at:null })
       }
     }
     if (ups.length) {
-      await supabase.from('player_tasks').upsert(ups,{onConflict:'player_id,category'})
-      cache.invalidate('avail:')   // claimed players no longer available
-      cache.invalidate('completed:')
+      const { error } = await supabase.from('player_tasks')
+        .upsert(ups, { onConflict:'player_id,category' })
+      if (error) {
+        console.error('Claim error:', error)
+        setMsg(`⚠️ Claim failed: ${error.message}`)
+        setClaiming(false)
+        return
+      }
     }
-    // Refresh tasks
-    const { data:td } = await supabase.from('player_tasks').select('*').in('player_id',ids)
-    const newTasks = {...tasks}
-    ;(td||[]).forEach((t:PlayerTask)=>{newTasks[`${t.player_id}__${t.category}`]=t})
+    // Verify the claim worked by re-fetching tasks
+    const { data:td } = await supabase.from('player_tasks').select('*').in('player_id', ids)
+    const newTasks = { ...tasks }
+    ;(td||[]).forEach((t:PlayerTask) => { newTasks[`${t.player_id}__${t.category}`]=t })
     setTasks(newTasks)
-    setPlayers(prev=>prev.filter(p=>!new Set(ids).has(p.player_id)))
-    setTotal(prev=>Math.max(0,prev-ids.length))
+    // Only remove from Available if upsert was verified
+    setPlayers(prev => prev.filter(p => !new Set(ids).has(p.player_id)))
+    setTotal(prev => Math.max(0, prev - ids.length))
     cache.invalidate('avail:'); cache.invalidate('completed:')
     setSelected(new Set()); setClaiming(false)
     setMsg(`✅ Claimed ${ids.length} player${ids.length>1?'s':''} — check Claimed tab`)
+  }
+
+  async function claim() {
+    await claimIds(Array.from(selected))
+  }
+
+  // ── Claim Top 50 ──────────────────────────────────────────────────────────
+  async function claimTop50() {
+    // Take the first 50 players currently shown in Available
+    const top50 = players.slice(0, 50).map(p => p.player_id)
+    if (!top50.length) { setMsg('No players to claim'); return }
+    await claimIds(top50)
   }
 
   // ── Unclaim ────────────────────────────────────────────────────────────────
@@ -590,19 +605,33 @@ export default function PlayersList({ profile }: Props) {
         </div>
 
         {/* Action bars */}
-        {subTab==='available'&&selected.size>0&&(
+        {subTab==='available'&&(
           <div style={{marginTop:'10px',padding:'10px 14px',background:'#1e3a5f',borderRadius:'8px',
             border:'1px solid #1d4ed8',display:'flex',alignItems:'center',gap:'12px',flexWrap:'wrap'}}>
-            <span style={{color:'#93c5fd',fontSize:'13px',fontWeight:600}}>{selected.size} selected</span>
-            <button onClick={claim} disabled={claiming}
-              style={{background:'#f97316',border:'none',color:'#fff',fontWeight:700,fontSize:'13px',
-                padding:'7px 18px',borderRadius:'8px',cursor:'pointer',opacity:claiming?0.6:1}}>
-              {claiming?'Claiming…':`🙋 Claim ${selected.size} →`}
-            </button>
-            <button onClick={()=>setSelected(new Set())}
-              style={{background:'none',border:`1px solid ${tk.border}`,color:tk.textMuted,
-                fontSize:'12px',padding:'6px 12px',borderRadius:'8px',cursor:'pointer'}}>Deselect all</button>
-            {msg&&<span style={{color:'#86efac',fontSize:'12px'}}>{msg}</span>}
+            {selected.size > 0 ? (
+              <>
+                <span style={{color:'#93c5fd',fontSize:'13px',fontWeight:600}}>{selected.size} selected</span>
+                <button onClick={claim} disabled={claiming}
+                  style={{background:'#f97316',border:'none',color:'#fff',fontWeight:700,fontSize:'13px',
+                    padding:'7px 18px',borderRadius:'8px',cursor:'pointer',opacity:claiming?0.6:1}}>
+                  {claiming?'Claiming…':`🙋 Claim ${selected.size} →`}
+                </button>
+                <button onClick={()=>setSelected(new Set())}
+                  style={{background:'none',border:`1px solid ${tk.border}`,color:tk.textMuted,
+                    fontSize:'12px',padding:'6px 12px',borderRadius:'8px',cursor:'pointer'}}>Deselect all</button>
+              </>
+            ) : (
+              <>
+                <span style={{color:'#93c5fd',fontSize:'13px'}}>Select players to claim, or:</span>
+                <button onClick={claimTop50} disabled={claiming||players.length===0}
+                  style={{background:'#f97316',border:'none',color:'#fff',fontWeight:700,fontSize:'13px',
+                    padding:'7px 18px',borderRadius:'8px',cursor:'pointer',
+                    opacity:(claiming||players.length===0)?0.6:1}}>
+                  {claiming?'Claiming…':`🚀 Claim Top ${Math.min(50,players.length)}`}
+                </button>
+              </>
+            )}
+            {msg&&<span style={{color:msg.startsWith('⚠️')?'#fca5a5':'#86efac',fontSize:'12px'}}>{msg}</span>}
           </div>
         )}
         {subTab==='claimed'&&(
