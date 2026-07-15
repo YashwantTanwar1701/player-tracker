@@ -86,7 +86,14 @@ export default function Tournaments({ profile }: Props) {
         total_done:       0,
         total_tasks:      0,
       }
-    }).sort((a: TournamentRow, b: TournamentRow) => b.player_count - a.player_count)
+    }).sort((a: TournamentRow, b: TournamentRow) => {
+      // Unassigned first, assigned last
+      const aAssigned = a.assigned_team ? 1 : 0
+      const bAssigned = b.assigned_team ? 1 : 0
+      if (aAssigned !== bAssigned) return aAssigned - bAssigned
+      // Within each group, sort by player count DESC
+      return b.player_count - a.player_count
+    })
 
     cache.set('tournament_rows', rows, TTL.TOURNAMENTS)
     setRows(rows)

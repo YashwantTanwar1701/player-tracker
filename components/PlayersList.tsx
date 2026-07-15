@@ -6,7 +6,8 @@ import { Player, PlayerTask, UserProfile, Status, Category, CATEGORIES, STATUSES
 import { useTheme, T } from '@/components/Dashboard'
 
 const PAGE       = 50
-const COMP_LIMIT = 500  // cap for completed tab
+const COMP_LIMIT = 500
+const AVAIL_CAP  = 1000  // max players shown in Available queue  // cap for completed tab
 const DONE: Status[] = ['Yes', 'Already Updated', 'Not Found On Any Source', 'Player Not Found Online', 'Blocked']
 const CORE  = ['Date of Birth', 'Height & Weight', 'Hometown Update'] as const
 const ALL4  = [...CORE, 'Profile Pic Update'] as const
@@ -186,6 +187,11 @@ export default function PlayersList({ profile }: Props) {
       return p.totalCore === CORE.length && p.pendingCount === CORE.length
     })
 
+    // Cap to AVAIL_CAP — reduces query load and keeps UI fast
+    // Operators work through batches; uncapped lists cause timeouts
+    const totalAvail = availIds.length
+    availIds = availIds.slice(0, AVAIL_CAP)
+
     // Apply search + gender filter
     if (search || filterGend !== 'All') {
       if (availIds.length > 0) {
@@ -214,7 +220,8 @@ export default function PlayersList({ profile }: Props) {
       .order('player_gender',{ascending:true,nullsFirst:false})
       .order('player_last_match_name',{ascending:true,nullsFirst:false})
 
-    await loadTasks((pd||[]) as Player[], availIds.length)
+    // Show total available count (before cap) so operators know there are more
+    await loadTasks((pd||[]) as Player[], totalAvail)
   }
 
   // ── Claimed ────────────────────────────────────────────────────────────────
@@ -617,6 +624,18 @@ export default function PlayersList({ profile }: Props) {
         </button>
       </div>
 
+      {/* Available cap notice */}
+      {subTab==='available' && total > AVAIL_CAP && (
+        <div style={{background:'#1e3a5f',border:'1px solid #1d4ed8',borderRadius:'8px',
+          padding:'10px 16px',display:'flex',alignItems:'center',gap:'10px'}}>
+          <span style={{fontSize:'16px'}}>ℹ️</span>
+          <span style={{color:'#93c5fd',fontSize:'13px'}}>
+            Showing first <strong>{AVAIL_CAP.toLocaleString()}</strong> of <strong>{total.toLocaleString()}</strong> available players.
+            Claim this batch and refresh to see the next set.
+          </span>
+        </div>
+      )}
+
       {/* Filters */}
       <div style={{background:tk.bgCard,border:`1px solid ${tk.border}`,borderRadius:'12px',padding:'12px 16px'}}>
         <div style={{display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center'}}>
@@ -627,14 +646,7 @@ export default function PlayersList({ profile }: Props) {
             onKeyDown={e=>{ if(e.key==='Enter') fetchPlayers() }}
             style={{...inp,flex:1,minWidth:'180px'}}/>
 
-          <select value={filterTour} onChange={e=>setFilterTour(e.target.value)} style={{...inp,minWidth:'200px'}}>
-            <option value="">All Tournaments ({myTours.length})</option>
-            {(isAdmin?tours.filter(t=>t.is_active!==false&&t.assigned_team!==null):myTours).map(t=>(
-              <option key={t.tournament_name??'NULL'} value={t.tournament_name??'NULL'}>
-                {t.tournament_name??'(No Tournament)'} — {t.assigned_team}
-              </option>
-            ))}
-          </select>
+
 
           <select value={filterGend} onChange={e=>setFilterGend(e.target.value as any)} style={inp}>
             <option value="All">All Genders</option>
@@ -650,7 +662,7 @@ export default function PlayersList({ profile }: Props) {
             </select>
           )}
 
-          <button onClick={()=>{setSearch('');setFilterTour('');setFilterGend('All');setFilterOp('all')}}
+          <button onClick={()=>{setSearch('');setFilterGend('All');setFilterOp('all')}}
             style={{background:'none',border:'none',color:tk.textDim,cursor:'pointer',fontSize:'12px'}}>Clear</button>
         </div>
 
