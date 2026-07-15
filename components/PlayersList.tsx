@@ -70,11 +70,29 @@ export default function PlayersList({ profile }: Props) {
       })
   }, [supabase])
 
-  // ── Tours ──────────────────────────────────────────────────────────────────
+  // ── Tours — use lightweight table, not the heavy tournament_overview view ──
   useEffect(() => {
-    supabase.from('tournament_overview')
-      .select('tournament_name, assigned_team, is_active')
-      .then(({ data }) => { setTours((data||[]) as TournamentMeta[]); setTourReady(true) })
+    let cancelled = false
+    async function load(attempt = 1) {
+      try {
+        const { data, error } = await supabase
+          .from('tournament_assignments')
+          .select('tournament_name, assigned_team, is_active')
+        if (cancelled) return
+        if (error) throw error
+        setTours((data||[]) as TournamentMeta[])
+        setTourReady(true)
+      } catch (e) {
+        console.error(`Tour load attempt ${attempt} failed:`, e)
+        if (!cancelled && attempt < 3) {
+          setTimeout(() => load(attempt + 1), 1000 * attempt)
+        } else if (!cancelled) {
+          setTourReady(true) // unblock even if failed
+        }
+      }
+    }
+    load()
+    return () => { cancelled = true }
   }, [])
 
   const myTours = tours.filter(t =>
@@ -115,17 +133,18 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Available ──────────────────────────────────────────────────────────────
   async function doAvailable(tourNames: string[]) {
-    // Step 1: Get all player IDs in these tournaments (paginated to avoid 1000 row cap)
+    // Step 1: Get all player IDs in these tournaments (paginated, max 20 pages = 20k players)
     const tourIds: number[] = []
     let page0 = 0
     const PAGE_SIZE = 1000
-    while (true) {
-      const { data: batch } = await supabase
+    const MAX_PAGES = 20
+    while (page0 < MAX_PAGES) {
+      const { data: batch, error } = await supabase
         .from('players')
         .select('player_id')
         .in('player_last_match_tournament_name', tourNames)
         .range(page0 * PAGE_SIZE, (page0 + 1) * PAGE_SIZE - 1)
-      if (!batch || batch.length === 0) break
+      if (error || !batch || batch.length === 0) break
       batch.forEach((p: any) => tourIds.push(p.player_id as number))
       if (batch.length < PAGE_SIZE) break
       page0++
@@ -255,39 +274,43 @@ export default function PlayersList({ profile }: Props) {
 
   // ── Completed ──────────────────────────────────────────────────────────────
   async function doCompleted(tourNames: string[]) {
-    // Use completed_players view with cache
-    const compKey = `completed:${tourNames.sort().join(',')}`
-    let completedView = cache.get<any[]>(compKey)
-    if (!completedView) {
-      const { data } = await supabase
-        .from('completed_players')
-        .select('player_id, completed_at')
-        .in('tournament_name', tourNames)
-        .order('completed_at', { ascending: false, nullsFirst: false })
-        .limit(COMP_LIMIT)
-      completedView = data || []
-      cache.set(compKey, completedView, TTL.COMPLETED)
-    }
+    // Direct player_tasks query — players where ALL 4 categories are done
+    // Sorted by most recent completion DESC
+    const { data: doneTasks, error: doneErr } = await supabase
+      .from('player_tasks')
+      .select('player_id, category, status, completed_at, updated_at')
+      .in('category', ALL4)
+      .not('status', 'in', '(Pending,In Progress)')
+      .order('completed_at', { ascending: false, nullsFirst: false })
+      .order('updated_at',   { ascending: false, nullsFirst: false })
+      .limit(COMP_LIMIT * 4)
 
-    if (!completedView?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    if (doneErr) { console.error('doCompleted error:', doneErr); setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    if (!doneTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
-    let sortedIds = completedView.map((r:any) => r.player_id as number)
+    // Group by player — only include if ALL 4 categories are done
+    const pMap: Record<number,{done:number;ts:number}> = {}
+    doneTasks.forEach((t:any) => {
+      if (!pMap[t.player_id]) pMap[t.player_id] = { done:0, ts:0 }
+      pMap[t.player_id].done++
+      const ts = new Date(t.completed_at||t.updated_at||0).getTime()
+      if (ts > pMap[t.player_id].ts) pMap[t.player_id].ts = ts
+    })
+
+    let sortedIds = Object.entries(pMap)
+      .filter(([,v]) => v.done >= ALL4.length)
+      .sort(([,a],[,b]) => b.ts - a.ts)
+      .map(([id]) => parseInt(id))
+      .slice(0, COMP_LIMIT)
+
+    if (!sortedIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
 
     // Apply operator filter for admin
     if (isAdmin && filterOp !== 'all') {
       const { data: opTasks } = await supabase.from('player_tasks')
         .select('player_id').in('category', CORE).eq('operator_name', filterOp)
         .in('player_id', sortedIds.slice(0, 500))
-      const opIds = new Set((opTasks||[]).map((t:any)=>t.player_id))
-      sortedIds = sortedIds.filter(id => opIds.has(id))
-    }
-
-    // Apply operator filter for admin
-    if (isAdmin && filterOp !== 'all') {
-      const { data: opTasks } = await supabase.from('player_tasks')
-        .select('player_id').in('category',CORE).eq('operator_name', filterOp)
-        .in('player_id', sortedIds)
-      const opIds = new Set((opTasks||[]).map((t:any)=>t.player_id))
+      const opIds = new Set((opTasks||[]).map((t:any) => t.player_id))
       sortedIds = sortedIds.filter(id => opIds.has(id))
     }
 
