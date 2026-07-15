@@ -261,67 +261,61 @@ export default function PlayersList({ profile }: Props) {
   }
 
   // ── Completed ──────────────────────────────────────────────────────────────
-  async function doCompleted(tourNames: string[]) {
-    // Direct player_tasks query — players where ALL 4 categories are done
-    // Sorted by most recent completion DESC
-    const { data: doneTasks, error: doneErr } = await supabase
-      .from('player_tasks')
-      .select('player_id, category, status, completed_at, updated_at')
-      .in('category', ALL4)
-      .not('status', 'in', '(Pending,In Progress)')
+  async function doCompleted(_tourNames: string[]) {
+    // Use completed_players view — pre-aggregated, fast, ordered by completed_at DESC
+    // Don't filter by tournament — completed players should always be visible
+    let q = supabase
+      .from('completed_players')
+      .select('player_id, completed_at')
       .order('completed_at', { ascending: false, nullsFirst: false })
-      .order('updated_at',   { ascending: false, nullsFirst: false })
-      .limit(COMP_LIMIT * 4)
+      .limit(COMP_LIMIT)
 
-    if (doneErr) { console.error('doCompleted error:', doneErr); setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
-    if (!doneTasks?.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    const { data: completedView, error: compErr } = await q
 
-    // Group by player — only include if ALL 4 categories are done
-    const pMap: Record<number,{done:number;ts:number}> = {}
-    doneTasks.forEach((t:any) => {
-      if (!pMap[t.player_id]) pMap[t.player_id] = { done:0, ts:0 }
-      pMap[t.player_id].done++
-      const ts = new Date(t.completed_at||t.updated_at||0).getTime()
-      if (ts > pMap[t.player_id].ts) pMap[t.player_id].ts = ts
-    })
+    if (compErr) {
+      console.error('doCompleted error:', compErr)
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false)
+      return
+    }
+    if (!completedView?.length) {
+      setPlayers([]); setTotal(0); setTasks({}); setLoading(false)
+      return
+    }
 
-    let sortedIds = Object.entries(pMap)
-      .filter(([,v]) => v.done >= ALL4.length)
-      .sort(([,a],[,b]) => b.ts - a.ts)
-      .map(([id]) => parseInt(id))
-      .slice(0, COMP_LIMIT)
-
-    if (!sortedIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    let sortedIds = completedView.map((r: any) => r.player_id as number)
 
     // Apply operator filter for admin
     if (isAdmin && filterOp !== 'all') {
-      const { data: opTasks } = await supabase.from('player_tasks')
-        .select('player_id').in('category', CORE).eq('operator_name', filterOp)
-        .in('player_id', sortedIds.slice(0, 500))
-      const opIds = new Set((opTasks||[]).map((t:any) => t.player_id))
+      const chunks = []
+      for (let i = 0; i < sortedIds.length; i += 500) chunks.push(sortedIds.slice(i, i+500))
+      const opIds = new Set<number>()
+      for (const chunk of chunks) {
+        const { data: opTasks } = await supabase.from('player_tasks')
+          .select('player_id').in('category', CORE).eq('operator_name', filterOp)
+          .in('player_id', chunk)
+        ;(opTasks||[]).forEach((t:any) => opIds.add(t.player_id))
+      }
       sortedIds = sortedIds.filter(id => opIds.has(id))
     }
 
-    const from = (page-1)*PAGE
+    const from    = (page-1)*PAGE
     const pageIds = sortedIds.slice(from, from+PAGE)
+
+    if (!pageIds.length) {
+      setPlayers([]); setTotal(sortedIds.length); setTasks({}); setLoading(false)
+      return
+    }
+
     const { data: pd } = await supabase.from('players')
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
       .in('player_id', pageIds)
-      .in('player_last_match_tournament_name', tourNames)
-    if (search) {
-      const s = search.toLowerCase()
-      const filtered = ((pd||[]) as Player[]).filter(p=>p.full_name.toLowerCase().includes(s))
-      const orderMap: Record<number,number> = {}
-      pageIds.forEach((id,i)=>{orderMap[id]=i})
-      filtered.sort((a:any,b:any)=>(orderMap[a.player_id]??9999)-(orderMap[b.player_id]??9999))
-      await loadTasks(filtered, sortedIds.length)
-    } else {
-      const playerList = ((pd||[]) as Player[])
-      const orderMap: Record<number,number> = {}
-      pageIds.forEach((id,i)=>{orderMap[id]=i})
-      playerList.sort((a,b)=>(orderMap[a.player_id]??9999)-(orderMap[b.player_id]??9999))
-      await loadTasks(playerList, sortedIds.length)
-    }
+
+    const orderMap: Record<number,number> = {}
+    pageIds.forEach((id,i) => { orderMap[id]=i })
+    const playerList = ((pd||[]) as Player[]).sort((a,b) =>
+      (orderMap[a.player_id]??999) - (orderMap[b.player_id]??999)
+    )
+    await loadTasks(playerList, sortedIds.length)
   }
 
   // ── Load tasks for a page of players ──────────────────────────────────────
