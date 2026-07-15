@@ -168,7 +168,7 @@ export default function PlayersList({ profile }: Props) {
     }
 
     // Apply search + gender filter on cached list
-    let filtered = allPlayers
+    let filtered: any[] = allPlayers || []
     if (search) {
       const pid = parseInt(search)
       if (!isNaN(pid)) {
