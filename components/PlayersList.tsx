@@ -57,6 +57,7 @@ export default function PlayersList({ profile }: Props) {
 
   const reloadTournaments = useCallback(() => {
     cache.invalidate('tournaments')
+    cache.invalidate('avail_ids:')
     cache.invalidate('avail:')
     cache.invalidate('completed:')
     setTourReady(false)
@@ -133,95 +134,75 @@ export default function PlayersList({ profile }: Props) {
   useEffect(() => { setPage(1) }, [search, filterTour, filterGend, filterOp, subTab])
 
   // ── Available ──────────────────────────────────────────────────────────────
+  // Strategy: single RPC call fetches all available player IDs server-side.
+  // Results cached for 2 min — pagination just slices the cached list.
+  // No more repeated DB scans per page.
   async function doAvailable(tourNames: string[]) {
-    // Step 1: Get all player IDs in these tournaments (paginated, max 20 pages = 20k players)
-    const tourIds: number[] = []
-    let page0 = 0
-    const PAGE_SIZE = 1000
-    const MAX_PAGES = 20
-    while (page0 < MAX_PAGES) {
-      const { data: batch, error } = await supabase
-        .from('players')
-        .select('player_id')
-        .in('player_last_match_tournament_name', tourNames)
-        .range(page0 * PAGE_SIZE, (page0 + 1) * PAGE_SIZE - 1)
-      if (error || !batch || batch.length === 0) break
-      batch.forEach((p: any) => tourIds.push(p.player_id as number))
-      if (batch.length < PAGE_SIZE) break
-      page0++
-    }
+    const cacheKey = `avail_ids:${[...tourNames].sort().join(',')}`
 
-    if (tourIds.length === 0) {
-      setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return
-    }
+    // Try to get from cache first
+    let allPlayers = cache.get<any[]>(cacheKey)
 
-    // Step 2: Get task states for all tournament players in chunks
-    // Available = player where ALL 3 core tasks are Pending AND operator_id IS NULL
-    const CHUNK = 500
-    const pendingPlayers: Record<number, { pendingCount: number; totalCore: number }> = {}
-
-    for (let i = 0; i < tourIds.length; i += CHUNK) {
-      const chunk = tourIds.slice(i, i + CHUNK)
-      const { data: taskChunk } = await supabase
-        .from('player_tasks')
-        .select('player_id, category, status, operator_id')
-        .in('player_id', chunk)
-        .in('category', CORE)
-
-      ;(taskChunk || []).forEach((t: any) => {
-        if (!pendingPlayers[t.player_id]) {
-          pendingPlayers[t.player_id] = { pendingCount: 0, totalCore: 0 }
-        }
-        pendingPlayers[t.player_id].totalCore++
-        // Only count as pending if BOTH status=Pending AND operator_id is null
-        if (t.status === 'Pending' && !t.operator_id) {
-          pendingPlayers[t.player_id].pendingCount++
-        }
+    if (!allPlayers) {
+      // Single RPC call — Postgres does all filtering server-side
+      const { data, error } = await supabase.rpc('get_available_players', {
+        tour_names: tourNames,
+        p_limit:    AVAIL_CAP,
       })
+
+      if (error) {
+        console.error('get_available_players error:', error)
+        setPlayers([]); setTotal(0); setTasks({}); setLoading(false)
+        setMsg('⚠️ Failed to load available players. Click Refresh to retry.')
+        return
+      }
+
+      allPlayers = data || []
+      cache.set(cacheKey, allPlayers, TTL.PLAYERS_LIST)
+
+      // Also fetch total count in background (non-blocking)
+      supabase.rpc('get_available_count', { tour_names: tourNames })
+        .then(({ data: cnt }) => {
+          if (cnt) setTotal(Number(cnt))
+        })
     }
 
-    // Available = player has exactly 3 core tasks, ALL are Pending with no operator
-    let availIds = tourIds.filter(id => {
-      const p = pendingPlayers[id]
-      if (!p) return false  // no tasks at all — skip
-      return p.totalCore === CORE.length && p.pendingCount === CORE.length
-    })
-
-    // Cap to AVAIL_CAP — reduces query load and keeps UI fast
-    // Operators work through batches; uncapped lists cause timeouts
-    const totalAvail = availIds.length
-    availIds = availIds.slice(0, AVAIL_CAP)
-
-    // Apply search + gender filter
-    if (search || filterGend !== 'All') {
-      if (availIds.length > 0) {
-        let fq = supabase.from('players').select('player_id, full_name, player_gender')
-          .in('player_id', availIds.slice(0, 5000))
-        if (search) {
-          const pid = parseInt(search)
-          if (!isNaN(pid)) fq = fq.eq('player_id', pid)
-          else             fq = fq.ilike('full_name', `%${search}%`)
-        }
-        if (filterGend !== 'All') fq = fq.eq('player_gender', parseInt(filterGend))
-        const { data: filtered } = await fq
-        availIds = (filtered || []).map((p: any) => p.player_id as number)
+    // Apply search + gender filter on cached list
+    let filtered = allPlayers
+    if (search) {
+      const pid = parseInt(search)
+      if (!isNaN(pid)) {
+        filtered = filtered.filter((p: any) => p.player_id === pid)
+      } else {
+        const s = search.toLowerCase()
+        filtered = filtered.filter((p: any) => p.full_name?.toLowerCase().includes(s))
       }
     }
+    if (filterGend !== 'All') {
+      filtered = filtered.filter((p: any) => p.gender === parseInt(filterGend))
+    }
 
-    if (!availIds.length) { setPlayers([]); setTotal(0); setTasks({}); setLoading(false); return }
+    const totalFiltered = filtered.length
+    const from    = (page - 1) * PAGE
+    const pageIds = filtered.slice(from, from + PAGE).map((p: any) => p.player_id as number)
 
-    const from    = (page-1)*PAGE
-    const pageIds = availIds.slice(from, from+PAGE)
+    if (!pageIds.length) {
+      setPlayers([]); setTotal(totalFiltered); setTasks({}); setLoading(false); return
+    }
+
+    // Fetch full player details for just this page (50 rows)
     const { data: pd } = await supabase.from('players')
       .select('player_id,full_name,club_sweater_num,player_gender,height,weight,most_team_id,team_ids,last_team_id,last_team_name,player_last_match_name,player_last_match_tournament_name,player_last_match_season_name')
       .in('player_id', pageIds)
-      .order('player_last_match_tournament_name',{ascending:true,nullsFirst:false})
-      .order('last_team_name',{ascending:true,nullsFirst:false})
-      .order('player_gender',{ascending:true,nullsFirst:false})
-      .order('player_last_match_name',{ascending:true,nullsFirst:false})
 
-    // Show total available count (before cap) so operators know there are more
-    await loadTasks((pd||[]) as Player[], totalAvail)
+    // Re-sort to match original order
+    const orderMap: Record<number, number> = {}
+    pageIds.forEach((id, i) => { orderMap[id] = i })
+    const sorted = ((pd || []) as Player[]).sort((a, b) =>
+      (orderMap[a.player_id] ?? 999) - (orderMap[b.player_id] ?? 999)
+    )
+
+    await loadTasks(sorted, totalFiltered)
   }
 
   // ── Claimed ────────────────────────────────────────────────────────────────
@@ -461,7 +442,7 @@ export default function PlayersList({ profile }: Props) {
     // Only remove from Available if upsert was verified
     setPlayers(prev => prev.filter(p => !new Set(ids).has(p.player_id)))
     setTotal(prev => Math.max(0, prev - ids.length))
-    cache.invalidate('avail:'); cache.invalidate('completed:')
+    cache.invalidate('avail_ids:'); cache.invalidate('avail:'); cache.invalidate('completed:')
     setSelected(new Set()); setClaiming(false)
     setMsg(`✅ Claimed ${ids.length} player${ids.length>1?'s':''} — check Claimed tab`)
   }
@@ -506,8 +487,7 @@ export default function PlayersList({ profile }: Props) {
       if (error) console.error('Unclaim error:', error)
       setMsg(`↩️ ${ids.length} player${ids.length>1?'s':''} fully reset to Pending`)
     }
-    cache.invalidate('avail:')
-    cache.invalidate('completed:')
+    cache.invalidate('avail_ids:'); cache.invalidate('avail:'); cache.invalidate('completed:')
     setSelected(new Set()); setClaiming(false); setPage(1); setSubTab('available')
   }
 
